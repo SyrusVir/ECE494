@@ -36,7 +36,5 @@ double getToF(int);
 void readDataToFile(int, FILE*);
 void deconfigurePins(uint32_t*);
 uint32_t* configurePins(int);
-void trigInt(void);
-void intTrigger(void);
 
 #endif

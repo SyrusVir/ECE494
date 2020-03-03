@@ -95,58 +95,9 @@ double getToF(int file_desc)
 	return ((time1-time2)/cal_count + clock_count1)/CLOCK_SPEED;
 }
 
-void intTrigger(void)
-{
-	readDataToFile(0, 0);
-}
-
-void readDataToFile(int in_spi, FILE* in_csv)
-{
-	static int initialized = 0;
-	if (!initialized)
-	{
-		initialized++;
-	}
-	else
-	{
-		static FILE* csv_file = 0;
-		static int spi_file = 0;
-		if (in_csv && in_spi)
-		{
-			csv_file = in_csv;
-			spi_file = in_spi;
-		}
-		else
-		{
-			time_t date;
-			double tof;
-			time(&date);
-			tof = getToF(spi_file)*1000000;
-			char* time_string = strtok(ctime(&date), "\n");
-			fprintf(csv_file, "%s,%f us\n", time_string, tof);
-		}
-	}
-}
-
-void trigInt(void)
-{
-	static int initialized = 0;
-	if (!initialized)
-	{
-		initialized++;
-	}
-	digitalWrite(PIN_START, 1);
-	digitalWrite(PIN_START, 0);
-	delayMicroseconds(5);
-	digitalWrite(PIN_STOP, 1);
-	digitalWrite(PIN_STOP, 0);
-}
-
 uint32_t* configurePins(int mem_file)
 {
 	wiringPiSetup();
-	wiringPiISR(PIN_INTB, INT_EDGE_FALLING, &intTrigger);
-	wiringPiISR(PIN_TRIG, INT_EDGE_RISING, &trigInt);
 	uint32_t* clk_reg = (uint32_t *) mmap(0, 0xA8, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_SHARED|MAP_LOCKED, mem_file, 0x3f101000);
 	if (!clk_reg)
 		return 0;
@@ -193,11 +144,26 @@ int main()
 		return 2;
 	}
 	initTDC(fd);
-	readDataToFile(fd, csv);
+	time_t date;
+	double tof;
+	char buffer[100];
 	for (int i = 0; i < 1000; i++)
 	{
 		while (micros() % 1000);
 		startMeas(fd);
+		while(!digitalRead(PIN_TRIG));
+		digitalWrite(PIN_START, 1);
+		digitalWrite(PIN_START, 0);
+		delayMicroseconds(5);
+		digitalWrite(PIN_STOP, 1);
+		digitalWrite(PIN_STOP, 0);
+		while(digitalRead(PIN_INTB));
+		tof = getToF(fd)*1000000;
+		time(&date);
+		strftime(buffer, 100, "%F,%T", gmtime(&date));
+		fprintf(csv, "%s,%f us\n", buffer, tof);
+
+
 	}
 	deconfigurePins(clk_reg);
 	close(mem_file);
