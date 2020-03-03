@@ -80,14 +80,10 @@ double getToF(int file_desc)
 	{
 		padding[0] = command[i];
 		tmp = getValue(file_desc, padding, 4);
-		results[i] = *tmp;
+		results[i] = *tmp & 0x7FFFFF;
 		free(tmp);
 	}
-	results[0] = results[0] & 0x7FFFFF;
-	results[1] = results[1] & 0xFFFF;
-	results[2] = results[2] & 0x7FFFFF;
-	results[3] = results[3] & 0x7FFFFF;
-	results[4] = results[4] & 0x7FFFFF;
+	results[1] &= 0xFFFF;
 	int32_t time1 = results[0];
 	int32_t clock_count1 = results[1];
 	int32_t time2 = results[2];
@@ -141,7 +137,7 @@ void trigInt(void)
 	}
 	digitalWrite(PIN_START, 1);
 	digitalWrite(PIN_START, 0);
-	delayMicroseconds(500);
+	delayMicroseconds(5);
 	digitalWrite(PIN_STOP, 1);
 	digitalWrite(PIN_STOP, 0);
 }
@@ -184,7 +180,7 @@ int main()
 {
 	int fd = open(device, O_RDWR);
 	int mem_file = open("/dev/mem", O_RDWR | O_SYNC);
-	FILE* csv = fopen("/home/pi/values.csv", "a");
+	FILE* csv = fopen("values.csv", "a");
 	if (!fd || !mem_file || !csv)
 	{
 		printf("Initialization Error\n");
@@ -198,10 +194,10 @@ int main()
 	}
 	initTDC(fd);
 	readDataToFile(fd, csv);
-	for (int i = 0; i < 10; i++)
+	for (int i = 0; i < 1000; i++)
 	{
+		while (micros() % 1000);
 		startMeas(fd);
-		delay(1000);
 	}
 	deconfigurePins(clk_reg);
 	close(mem_file);
