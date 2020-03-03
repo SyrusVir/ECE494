@@ -1,6 +1,7 @@
 #ifndef CODE_H
 #define CODE_H
 
+//Libraries to be used
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -19,7 +20,7 @@
 #include <linux/spi/spidev.h>
 #include <wiringPi.h>
 
-const char *device = "/dev/spidev0.0";
+//Defines pin locations and TDC clock speed
 const double CLOCK_SPEED = 9600000.0;
 const int PIN_TRIG = 2;
 const int PIN_EN = 3;
@@ -28,6 +29,7 @@ const int PIN_STOP = 5;
 const int PIN_INTB = 6;
 const int PIN_CLK = 7;
 
+//Function prototypes
 uint32_t* getValue(int, uint8_t*, int);
 uint32_t* convertToLongArray(uint8_t*);
 int initTDC(int);
