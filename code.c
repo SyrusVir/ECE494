@@ -53,7 +53,7 @@ int initTDC(int file_desc)
 
 	//Sends command
 	uint32_t* return_buffer = getValue(file_desc, tx, 2);
-	
+
 	//If successful command
 	if (return_buffer)
 	{
@@ -77,7 +77,7 @@ int startMeas(int file_desc)
 
 	//Sends command
 	uint32_t* return_buffer = getValue(file_desc, tx, 2);
-	
+
 	//If successful command
 	if (return_buffer)
 	{
@@ -135,7 +135,7 @@ double getToF(int file_desc)
 	int32_t time2 = results[2];
 	int32_t calibration1 = results[3];
 	int32_t calibration2 = results[4];
-	
+
 	//Computes time of flight
 	double cal_count = calibration2 - calibration1;
 	if (cal_count <= 0.0)
@@ -162,7 +162,7 @@ uint32_t* configurePins(int mem_file)
 	//Kills clock and waits for it to die
 	clk_reg[28] = 0x5a000020;
 	while (clk_reg[28] & 0x00000080);
-	
+
 	//Configures clock to divide base by two
 	clk_reg[29] = 0x5a002000;
 	delayMicroseconds(10);
@@ -208,7 +208,7 @@ int main()
 	//Initialize files to be read/write to
 	//SPI Driver
 	int spi_driver = open("/dev/spidev0.0", O_RDWR);
-	
+
 	//Memory File to access clock pins
 	int mem_file = open("/dev/mem", O_RDWR | O_SYNC);
 
@@ -239,56 +239,82 @@ int main()
 	time_t date;
 	double tof;
 	char buffer[100];
+	
+	//Initializes timekeeping variables
 	struct timeval currentTime;
 	gettimeofday(&currentTime, NULL);
 	uint32_t timestamp = currentTime.tv_usec;
 	uint32_t prev_timestamp = currentTime.tv_usec;
-	//Repeats 5000 times
-	for (int i = 0; i < 5000; i++)
+	uint32_t start_sec = currentTime.tv_sec + 1;
+	while (timestamp != 0)
 	{
-		//While the current time is not an exact millisecond
-		//or the same time as previously recorded
-		while (timestamp % 1000 || timestamp == prev_timestamp)
+		gettimeofday(&currentTime, NULL);
+		timestamp = currentTime.tv_usec;
+	}
+	prev_timestamp = 0;
+
+	//Does this loop until user stops it.
+	do
+	{
+		//Begins the TDC's timing process
+		startMeas(spi_driver);
+
+		//Waits for a trigger from the TDC
+		while(!digitalRead(PIN_TRIG) && timestamp % 1000 < 850)
 		{
 			gettimeofday(&currentTime, NULL);
 			timestamp = currentTime.tv_usec;
 		}
 
+		//If the while loop did not timeout
+		if (timestamp % 1000 < 850)
+		{
+			//Sends a start pulse to the TDC (testing)
+			digitalWrite(PIN_START, 1);
+			digitalWrite(PIN_START, 0);
+
+			//Waits for 10 microseconds (testing)
+			delayMicroseconds(10);
+
+			//Sends stop pulse (testing)
+			digitalWrite(PIN_STOP, 1);
+			digitalWrite(PIN_STOP, 0);
+
+			//Waits for interrupt to go low from the TDC
+			while(digitalRead(PIN_INTB) && timestamp % 1000 < 900)
+			{
+				gettimeofday(&currentTime, NULL);
+				timestamp = currentTime.tv_usec;
+			}
+			
+			//If the while loop did not timeout
+			if (timestamp % 1000 < 900)
+			{
+				//Gets the time of flight from the TDC in microseconds
+				tof = getToF(spi_driver)*1000000;
+
+				//Gets current UTC Time
+				time(&date);
+				strftime(buffer, 100, "%F,%T", gmtime(&date));
+
+				//Writes date, time, and time of flight to file
+				fprintf(csv, "%s:%.3d,%f us\n", buffer, timestamp/1000, tof);
+			}
+		}
+
+		//While the current time is not an exact millisecond (+10 us)
+		//or the same time as previously recorded
+		while (timestamp % 1000 > 10 || timestamp%100 == prev_timestamp%100)
+		{
+			gettimeofday(&currentTime, NULL);
+			timestamp = currentTime.tv_usec;
+		}
+
+		//Sets previous timestamp
 		prev_timestamp = timestamp;
 
-		//Begins the TDC's timing process
-		startMeas(spi_driver);
-
-		//Waits for a trigger from the TDC
-		while(!digitalRead(PIN_TRIG));
-
-		//Sends a start pulse to the TDC (testing)
-		digitalWrite(PIN_START, 1);
-		digitalWrite(PIN_START, 0);
-
-		//Waits for 10 microseconds (testing)
-		delayMicroseconds(10);
-
-		//Sends stop pulse (testing)
-		digitalWrite(PIN_STOP, 1);
-		digitalWrite(PIN_STOP, 0);
-
-		//Waits for interrupt to go low from the TDC
-		while(digitalRead(PIN_INTB));
-
-		//Gets the time of flight from the TDC in microseconds
-		tof = getToF(spi_driver)*1000000;
-
-		//Gets current UTC Time
-		time(&date);
-		strftime(buffer, 100, "%F,%T", gmtime(&date));
-
-		//Writes date, time, and time of flight to file
-		fprintf(csv, "%s,%f us\n", buffer, tof);
-		fflush(csv);
-
-
 	}
+	while (currentTime.tv_sec >= start_sec && currentTime.tv_sec < start_sec + 60);
 
 	//Deconfigures the pins
 	deconfigurePins(clk_reg);
