@@ -239,12 +239,22 @@ int main()
 	time_t date;
 	double tof;
 	char buffer[100];
-
-	//Repeats 1000 times
-	for (int i = 0; i < 1000; i++)
+	struct timeval currentTime;
+	gettimeofday(&currentTime, NULL);
+	uint32_t timestamp = currentTime.tv_usec;
+	uint32_t prev_timestamp = currentTime.tv_usec;
+	//Repeats 5000 times
+	for (int i = 0; i < 5000; i++)
 	{
 		//While the current time is not an exact millisecond
-		while (micros() % 1000);
+		//or the same time as previously recorded
+		while (timestamp % 1000 || timestamp == prev_timestamp)
+		{
+			gettimeofday(&currentTime, NULL);
+			timestamp = currentTime.tv_usec;
+		}
+
+		prev_timestamp = timestamp;
 
 		//Begins the TDC's timing process
 		startMeas(spi_driver);
@@ -256,8 +266,8 @@ int main()
 		digitalWrite(PIN_START, 1);
 		digitalWrite(PIN_START, 0);
 
-		//Waits for 5 microseconds (testing)
-		delayMicroseconds(5);
+		//Waits for 10 microseconds (testing)
+		delayMicroseconds(10);
 
 		//Sends stop pulse (testing)
 		digitalWrite(PIN_STOP, 1);
@@ -275,6 +285,7 @@ int main()
 
 		//Writes date, time, and time of flight to file
 		fprintf(csv, "%s,%f us\n", buffer, tof);
+		fflush(csv);
 
 
 	}

@@ -2,17 +2,12 @@
 #define CODE_H
 
 //Libraries to be used
-#include <assert.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <string.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 #include <time.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
