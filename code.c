@@ -232,6 +232,12 @@ int main()
 		return 2;
 	}
 
+	//Makes program run on CPU core that's not involved in scheduling
+	cpu_set_t  mask;
+	CPU_ZERO(&mask);
+	CPU_SET(3, &mask);
+	sched_setaffinity(0, sizeof(mask), &mask);
+
 	//Initalizes the TDC's CONFIG1 register
 	initTDC(spi_driver);
 
@@ -239,7 +245,7 @@ int main()
 	time_t date;
 	double tof;
 	char buffer[100];
-	
+
 	//Initializes timekeeping variables
 	struct timeval currentTime;
 	gettimeofday(&currentTime, NULL);
@@ -260,14 +266,14 @@ int main()
 		startMeas(spi_driver);
 
 		//Waits for a trigger from the TDC
-		while(!digitalRead(PIN_TRIG) && timestamp % 1000 < 850)
+		while(!digitalRead(PIN_TRIG) && timestamp % 1000 < 900)
 		{
 			gettimeofday(&currentTime, NULL);
 			timestamp = currentTime.tv_usec;
 		}
 
 		//If the while loop did not timeout
-		if (timestamp % 1000 < 850)
+		if (timestamp % 1000 < 900)
 		{
 			//Sends a start pulse to the TDC (testing)
 			digitalWrite(PIN_START, 1);
@@ -281,14 +287,14 @@ int main()
 			digitalWrite(PIN_STOP, 0);
 
 			//Waits for interrupt to go low from the TDC
-			while(digitalRead(PIN_INTB) && timestamp % 1000 < 900)
+			while(digitalRead(PIN_INTB) && timestamp % 1000 < 975)
 			{
 				gettimeofday(&currentTime, NULL);
 				timestamp = currentTime.tv_usec;
 			}
-			
+
 			//If the while loop did not timeout
-			if (timestamp % 1000 < 900)
+			if (timestamp % 1000 < 975)
 			{
 				//Gets the time of flight from the TDC in microseconds
 				tof = getToF(spi_driver)*1000000;
@@ -304,7 +310,7 @@ int main()
 
 		//While the current time is not an exact millisecond (+10 us)
 		//or the same time as previously recorded
-		while (timestamp % 1000 > 10 || timestamp%100 == prev_timestamp%100)
+		while (timestamp % 1000 > 10 || timestamp/10 == prev_timestamp/10)
 		{
 			gettimeofday(&currentTime, NULL);
 			timestamp = currentTime.tv_usec;
@@ -314,7 +320,7 @@ int main()
 		prev_timestamp = timestamp;
 
 	}
-	while (currentTime.tv_sec >= start_sec && currentTime.tv_sec < start_sec + 60);
+	while (currentTime.tv_sec >= start_sec && currentTime.tv_sec < start_sec + 5);
 
 	//Deconfigures the pins
 	deconfigurePins(clk_reg);

@@ -1,5 +1,6 @@
 #ifndef CODE_H
 #define CODE_H
+#define _GNU_SOURCE
 
 //Libraries to be used
 #include <stdio.h>
@@ -8,6 +9,7 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
+#include <sched.h>
 #include <time.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -17,11 +19,11 @@
 
 //Defines pin locations and TDC clock speed
 const double CLOCK_SPEED = 9600000.0;
-const int PIN_TRIG = 2;
-const int PIN_EN = 3;
-const int PIN_START = 4;
-const int PIN_STOP = 5;
-const int PIN_INTB = 6;
+const int PIN_TRIG = 0;
+const int PIN_EN = 2;
+const int PIN_START = 1;
+const int PIN_STOP = 4;
+const int PIN_INTB = 3;
 const int PIN_CLK = 7;
 
 //Function prototypes
