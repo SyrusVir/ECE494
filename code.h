@@ -13,6 +13,8 @@
 #include <time.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <xmlrpc-c/base.h>
+#include <xmlrpc-c/client.h>
 #include <linux/types.h>
 #include <linux/spi/spidev.h>
 #include <wiringPi.h>
@@ -21,7 +23,7 @@
 const double CLOCK_SPEED = 9600000.0;
 const int PIN_TRIG = 0;
 const int PIN_EN = 2;
-const int PIN_START = 1;
+const int PIN_START = 9;
 const int PIN_STOP = 4;
 const int PIN_INTB = 3;
 const int PIN_CLK = 7;
@@ -34,6 +36,7 @@ int startMeas(int);
 double getToF(int);
 void readDataToFile(int, FILE*);
 void deconfigurePins(uint32_t*);
-uint32_t* configurePins(int);
+void configurePins(int);
+uint32_t* setClockParams(int);
 
 #endif

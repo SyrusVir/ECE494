@@ -143,12 +143,8 @@ double getToF(int file_desc)
 	return ((time1-time2)/cal_count + clock_count1)/CLOCK_SPEED;
 }
 
-//Pin Configuration function
-uint32_t* configurePins(int mem_file)
+uint32_t* setClockParams(int mem_file)
 {
-	//Sets up pin addresses and other under the hood stuff
-	wiringPiSetup();
-
 	//Memory maps clock register to userspace
 	uint32_t* clk_reg = (uint32_t *) mmap(0, 0xA8, 
 			PROT_READ|PROT_WRITE|PROT_EXEC, 
@@ -174,6 +170,16 @@ uint32_t* configurePins(int mem_file)
 	//Start the clock
 	clk_reg[28] |= 0x5a000010;
 
+	//Returns address to clock register
+	return clk_reg;
+}
+
+//Pin Configuration function
+void configurePins(int mem_file)
+{
+	//Sets up pin addresses and other under the hood stuff
+	wiringPiSetup();
+
 	//Configures the following pins in these manners
 	pinMode(PIN_CLK, GPIO_CLOCK);
 	pinMode(PIN_EN, OUTPUT);
@@ -186,9 +192,6 @@ uint32_t* configurePins(int mem_file)
 	digitalWrite(PIN_STOP, 0);
 	digitalWrite(PIN_EN, 1);
 	delay(1);
-
-	//Returns address to clock register
-	return clk_reg;
 }
 
 //Pin Deconfiguration Function
@@ -205,6 +208,12 @@ void deconfigurePins(uint32_t* clk_reg)
 //Main Function
 int main()
 {
+	//Makes program run on CPU core that's not involved in scheduling
+	cpu_set_t  mask;
+	CPU_ZERO(&mask);
+	CPU_SET(3, &mask);
+	sched_setaffinity(0, sizeof(mask), &mask);
+	
 	//Initialize files to be read/write to
 	//SPI Driver
 	int spi_driver = open("/dev/spidev0.0", O_RDWR);
@@ -223,7 +232,8 @@ int main()
 	}
 
 	//Configures pins and gets address of clock register
-	uint32_t* clk_reg = configurePins(mem_file);
+	uint32_t* clk_reg = setClockParams(mem_file);
+	configurePins(mem_file);
 
 	//If unsuccessful pin registration
 	if  (!clk_reg)
@@ -232,11 +242,21 @@ int main()
 		return 2;
 	}
 
-	//Makes program run on CPU core that's not involved in scheduling
-	cpu_set_t  mask;
-	CPU_ZERO(&mask);
-	CPU_SET(3, &mask);
-	sched_setaffinity(0, sizeof(mask), &mask);
+
+	xmlrpc_env env;
+	xmlrpc_value* resultP;
+	size_t stringLength;
+	char* readString;
+	char* const clientName = "ToF LiDAR System";
+	char* const clientVersion = "1.0";
+	char* const url = "http://192.168.13.10:8000/";
+	char* const methodName = "getGPGGAState";
+
+	// Initialize our error-handling environment.
+	xmlrpc_env_init(&env);
+
+	// Start up our XML-RPC client library.
+	xmlrpc_client_init2(&env, XMLRPC_CLIENT_NO_FLAGS, clientName, clientVersion, NULL, 0);
 
 	//Initalizes the TDC's CONFIG1 register
 	initTDC(spi_driver);
@@ -304,10 +324,19 @@ int main()
 				strftime(buffer, 100, "%F,%T", gmtime(&date));
 
 				//Writes date, time, and time of flight to file
-				fprintf(csv, "%s:%.3d,%f us\n", buffer, timestamp/1000, tof);
+				fprintf(csv, "%s:%.3d,%07.4f us\n", buffer, timestamp/1000, tof);
 			}
 		}
+		if (!(currentTime.tv_sec % 60) && !(timestamp/1000))
+		{
+			fflush(csv);
 
+			/* Make the remote procedure call */
+			//resultP = xmlrpc_client_call(&env, url, methodName, "");
+
+			//xmlrpc_read_string_lp(&env, &resultP, &stringLength, &readString);
+		}
+		
 		//While the current time is not an exact millisecond (+10 us)
 		//or the same time as previously recorded
 		while (timestamp % 1000 > 10 || timestamp/10 == prev_timestamp/10)
