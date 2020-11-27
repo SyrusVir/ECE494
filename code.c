@@ -32,8 +32,7 @@ uint32_t* getValue(int file_desc, uint8_t* command, int clock_length)
 //Converts uint8_t array to uint32_t* array
 uint32_t* convertToLongArray(uint8_t* arr)
 {
-	uint32_t* return_value = calloc(sizeof(arr)/4, sizeof(uint32_t));
-	uint32_t tmp = 0x0;
+	uint32_t* return_value = calloc(sizeof(arr)/4, sizeof(uint32_t)); //sizeof(arr) returns array POINTER size
 	int i = 0;
 	for (; i < sizeof(arr); i++)
 	{
@@ -206,8 +205,14 @@ void deconfigurePins(uint32_t* clk_reg)
 }
 
 //Main Function
-int main()
+int main( int argc, char *argv[])
 {
+	//parse command line; expect 1 argument = seconds to run measurement
+	int runtime_sec = 5; //TO-DO: if no argument, run until desired keypress
+	if (argc > 1) {
+		runtime_sec = *argv[1];
+	}
+	
 	//Makes program run on CPU core that's not involved in scheduling
 	cpu_set_t  mask;
 	CPU_ZERO(&mask);
