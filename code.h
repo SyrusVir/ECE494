@@ -9,6 +9,7 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
+#include <signal.h>
 #include <sched.h>
 #include <time.h>
 #include <fcntl.h>
@@ -29,6 +30,7 @@ const int PIN_INTB = 3;
 const int PIN_CLK = 7;
 
 //Function prototypes
+void catchSigInt(int);
 uint32_t* getValue(int, uint8_t*, int);
 uint32_t* convertToLongArray(uint8_t*);
 int initTDC(int);
