@@ -298,8 +298,22 @@ int main( int argc, char *argv[])
 	prev_timestamp = 0;
 
 	//Does this loop until user stops it.
+	//int iteration = 0;
+	//char str0[12] = "Running";
+	//char str[12] = "Running";
+	//char dot = ".";
 	do
 	{
+		//user feedback
+		/**i = i % 4;
+		if (i) == 0
+		{
+			strcpy(str, str0);
+		}
+		printf(str);
+		str = strcat(str, dot);
+		**/
+	
 		//Begins the TDC's timing process
 		startMeas(spi_driver);
 
@@ -366,6 +380,7 @@ int main( int argc, char *argv[])
 		//Sets previous timestamp
 		prev_timestamp = timestamp;
 
+		//additional while loop exit condition
 		if (runtime_sec > -1)
 		{
 			if (currentTime.tv_sec >= start_sec && currentTime.tv_sec < start_sec + runtime_sec)
