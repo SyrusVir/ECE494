@@ -32,7 +32,7 @@ uint32_t* getValue(int file_desc, uint8_t* command, int clock_length)
 //Converts uint8_t array to uint32_t* array
 uint32_t* convertToLongArray(uint8_t* arr)
 {
-	uint32_t* return_value = calloc(sizeof(arr)/4, sizeof(uint32_t));
+	uint32_t* return_value = calloc(sizeof(arr)/4, sizeof(uint32_t)); //sizeof(arr) returns array POINTER size
 	uint32_t tmp = 0x0;
 	int i = 0;
 	for (; i < sizeof(arr); i++)
@@ -269,7 +269,7 @@ int main()
 	//Initializes timekeeping variables
 	struct timeval currentTime;
 	gettimeofday(&currentTime, NULL);
-	uint32_t timestamp = currentTime.tv_usec;
+	uint32_t timestamp = currentTime.tv_usec; //timestamp = additional microseconds after seconds from Epoch
 	uint32_t prev_timestamp = currentTime.tv_usec;
 	uint32_t start_sec = currentTime.tv_sec + 1;
 	while (timestamp != 0)
@@ -285,7 +285,7 @@ int main()
 		//Begins the TDC's timing process
 		startMeas(spi_driver);
 
-		//Waits for a trigger from the TDC
+		//Waits for a trigger from the TDC w/ timeout of 900 usec
 		while(!digitalRead(PIN_TRIG) && timestamp % 1000 < 900)
 		{
 			gettimeofday(&currentTime, NULL);
