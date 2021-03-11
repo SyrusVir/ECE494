@@ -324,7 +324,7 @@ int main()
 				strftime(buffer, 100, "%F,%T", gmtime(&date));
 
 				//Writes date, time, and time of flight to file
-				fprintf(csv, "%s:%.3d,%07.4f us\n", buffer, timestamp/1000, tof);
+				fprintf(csv, "%ld.%d,%s:%.3d,%07.4f us\n", date, timestamp/1000, buffer, timestamp/1000, tof);
 			}
 		}
 		if (!(currentTime.tv_sec % 60) && !(timestamp/1000))
