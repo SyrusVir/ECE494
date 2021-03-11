@@ -1,5 +1,13 @@
 #include "code.h"
 
+
+//signal handler for SIGINT i.e. ctrl+c; used to exit main do-while using ctrl+c on terminal
+int main_stop_flag = 0;
+void catchSigInt(int sig_num)
+{
+	main_stop_flag = 1;
+}
+
 //Sends commands and returns results via SPI from TDC
 uint32_t* getValue(int file_desc, uint8_t* command, int clock_length)
 {
@@ -206,8 +214,19 @@ void deconfigurePins(uint32_t* clk_reg)
 }
 
 //Main Function
-int main()
+int main( int argc, char *argv[])
 {
+	//parse command line; expect 1 argument = seconds to run measurement
+	int runtime_sec = -1; 
+	if (argc > 1) {
+		runtime_sec = *argv[1];
+	}
+	else 
+	{
+		//assign handler of SIGINT signal as catchSigInt if no run time provided in cmd line args
+		signal(SIGINT, catchSigInt);
+	}
+
 	//Makes program run on CPU core that's not involved in scheduling
 	cpu_set_t  mask;
 	CPU_ZERO(&mask);
@@ -348,8 +367,21 @@ int main()
 		//Sets previous timestamp
 		prev_timestamp = timestamp;
 
+		//additional while loop exit condition
+		if (runtime_sec > -1)
+		{
+			if (currentTime.tv_sec >= start_sec && currentTime.tv_sec < start_sec + runtime_sec)
+			{
+				main_stop_flag = 1;
+			} 
 	}
-	while (currentTime.tv_sec >= start_sec && currentTime.tv_sec < start_sec + 5);
+			} 
+	}
+			} 
+		}
+
+	}
+	while (!main_stop_flag);
 
 	//Deconfigures the pins
 	deconfigurePins(clk_reg);
@@ -358,6 +390,8 @@ int main()
 	close(mem_file);
 	fclose(csv);
 	close(spi_driver);
+
+	printf("Exitted\n");
 
 	//Returns 0
 	return 0;
