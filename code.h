@@ -13,8 +13,8 @@
 #include <time.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <xmlrpc-c/base.h>
-#include <xmlrpc-c/client.h>
+// #include <xmlrpc-c/base.h>
+// #include <xmlrpc-c/client.h>
 #include <linux/types.h>
 #include <linux/spi/spidev.h>
 #include <wiringPi.h>

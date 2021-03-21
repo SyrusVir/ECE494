@@ -1,5 +1,31 @@
+#define _GNU_SOURCE
+#include <pthread.h>
+#include <signal.h>
 #include "code.h"
 
+// #define USE_PIGPIO	// uncomment to use pigpio routines for SPI and TDC clock
+// #define TDC_DEBUG	// uncomment to debug
+
+//CPU options
+#define POLLER_CORE 2	// isolated cpu core to execute pin polling					
+#define MAIN_CORE 1		// isolated cpu core to execute main data acquisition code
+
+//Mirror and SOS pins
+#define MIRROR_PWM_PIN 18           // physical pin 12; mirror control PWM output
+#define MIRROR_SPEED_PIN 23         // physical pin 16; mirror ATSPEED input
+#define MIRROR_SOS_PIN 24           // physical pin 18; sos detector input
+#define MIRROR_ENABLE_PIN 25        // physical pin 22; mirror ENABLE output
+#define MIRROR_SOS_DELAY_USEC 5000  // usecs to delay once SOS signal detected by poller
+#define MIRROR_RPM 1000
+
+//laser pins
+#define LASER_ENABLE_PIN 5      // physical pin 29
+#define LASER_SHUTTER_PIN 6     // physical pin 31
+#define LASER_PULSE_PIN 13       // physical pin 33
+#define LASER_PULSE_FREQ 1000    
+#define LASER_PULSE_PERIOD_USEC 1000000/LASER_PULSE_FREQ   
+#define LASER_PULSE_WIDTH_USEC 10
+#define LASER_PULSE_DUTY (unsigned int)(LASER_PULSE_WIDTH_USEC / 1000000.0 * LASER_PULSE_FREQ * PI_HW_PWM_RANGE)
 
 //signal handler for SIGINT i.e. ctrl+c; used to exit main do-while using ctrl+c on terminal
 int main_stop_flag = 0;
@@ -61,7 +87,7 @@ int initTDC(int file_desc)
 
 	//Sends command
 	uint32_t* return_buffer = getValue(file_desc, tx, 2);
-	
+
 	//If successful command
 	if (return_buffer)
 	{
@@ -104,12 +130,13 @@ int startMeas(int file_desc)
 double getToF(int file_desc)
 {
 	//Initializes commands to be sent to TDC
-	uint8_t command[5];
-	command[0] = 0x10;	//Read TIME1
-	command[1] = 0x11;	//Read CLOCK_COUNT1
-	command[2] = 0x12;	//Read TIME2
-	command[3] = 0x1B;	//Read CALIBRATION1
-	command[4] = 0x1C;	//Read CALIBRATION2
+	static uint8_t command[5] = {
+		0x10,	//Read TIME1
+		0x11,	//Read CLOCK_COUNT1
+		0x12,	//Read TIME2
+		0x1B,	//Read CALIBRATION1
+		0x1C	//Read CALIBRATION2
+	};
 
 	//Formats commands and results
 	uint8_t padding[4] = {0x0, };
@@ -153,6 +180,7 @@ double getToF(int file_desc)
 
 uint32_t* setClockParams(int mem_file)
 {
+	#ifndef USE_PIGPIO
 	//Memory maps clock register to userspace
 	uint32_t* clk_reg = (uint32_t *) mmap(0, 0xA8, 
 			PROT_READ|PROT_WRITE|PROT_EXEC, 
@@ -180,13 +208,21 @@ uint32_t* setClockParams(int mem_file)
 
 	//Returns address to clock register
 	return clk_reg;
+	
+	#else
+	gpioHardwareClock(TDC_CLOCK_PIN, TDC_CLOCK_FREQ);
+	#endif
 }
 
 //Pin Configuration function
 void configurePins(int mem_file)
 {
 	//Sets up pin addresses and other under the hood stuff
-	wiringPiSetup();
+	if (gpioInitialise() < 0) 
+	{
+		perror("gpioInitialise()");
+		return -1;
+	}
 
 	//Configures the following pins in these manners
 	pinMode(PIN_CLK, GPIO_CLOCK);
@@ -216,10 +252,27 @@ void deconfigurePins(uint32_t* clk_reg)
 //Main Function
 int main( int argc, char *argv[])
 {
+	// configuring pigpio pins to control laser
+	if(gpioInitialise() < 0)
+	{
+		perror("gpioInitialise()");
+		return -1;
+	}
+
+	gpioSetMode(LASER_ENABLE_PIN, PI_OUTPUT);
+	gpioSetMode(LASER_SHUTTER_PIN, PI_OUTPUT);
+	gpioSetMode(LASER_PULSE_PIN);
+
+	gpioWrite(LASER_PULSE_PIN, 0);
+	gpioWrite(LASER_SHUTTER_PIN,1);
+	gpioDelay(500000);
+
+	gpioWrite(LASER_ENABLE_PIN,0);
+
 	//parse command line; expect 1 argument = seconds to run measurement
 	int runtime_sec = -1; 
 	if (argc > 1) {
-		runtime_sec = *argv[1];
+		runtime_sec = atoi(argv[1]);
 	}
 	else 
 	{
@@ -230,15 +283,15 @@ int main( int argc, char *argv[])
 	//Makes program run on CPU core that's not involved in scheduling
 	cpu_set_t  mask;
 	CPU_ZERO(&mask);
-	CPU_SET(3, &mask);
-	sched_setaffinity(0, sizeof(mask), &mask);
+	CPU_SET(MAIN_CORE, &mask);
+	pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
 	
 	//Initialize files to be read/write to
 	//SPI Driver
 	int spi_driver = open("/dev/spidev0.0", O_RDWR);
 
 	//Memory File to access clock pins
-	int mem_file = open("/dev/mem", O_RDWR | O_SYNC);	
+	int mem_file = open("/dev/mem", O_RDWR | O_SYNC);
 
 	//File where values are to be written to
 	FILE* csv = fopen("values.csv", "a");
@@ -260,22 +313,6 @@ int main( int argc, char *argv[])
 		printf("Pin Configuration Error\n");
 		return 2;
 	}
-
-
-/* 	xmlrpc_env env;
-	xmlrpc_value* resultP;
-	size_t stringLength;
-	char* readString;
-	char* const clientName = "ToF LiDAR System";
-	char* const clientVersion = "1.0";
-	char* const url = "http://192.168.13.10:8000/";
-	char* const methodName = "getGPGGAState";
-
-	// Initialize our error-handling environment.
-	xmlrpc_env_init(&env);
-
-	// Start up our XML-RPC client library.
-	xmlrpc_client_init2(&env, XMLRPC_CLIENT_NO_FLAGS, clientName, clientVersion, NULL, 0); */
 
 	//Initalizes the TDC's CONFIG1 register
 	initTDC(spi_driver);
@@ -313,7 +350,10 @@ int main( int argc, char *argv[])
 
 		//If the while loop did not timeout
 		if (timestamp % 1000 < 900)
-		{
+		{	
+			#ifndef TDC_DEBUG
+			gpioTrigger(LASER_PULSE_PIN, 2, 1);
+			#else
 			//Sends a start pulse to the TDC (testing)
 			digitalWrite(PIN_START, 1);
 			digitalWrite(PIN_START, 0);
@@ -349,11 +389,6 @@ int main( int argc, char *argv[])
 		if (!(currentTime.tv_sec % 60) && !(timestamp/1000))
 		{
 			fflush(csv);
-
-			/* Make the remote procedure call */
-			//resultP = xmlrpc_client_call(&env, url, methodName, "");
-
-			//xmlrpc_read_string_lp(&env, &resultP, &stringLength, &readString);
 		}
 		
 		//While the current time is not an exact millisecond (+10 us)
@@ -368,18 +403,10 @@ int main( int argc, char *argv[])
 		prev_timestamp = timestamp;
 
 		//additional while loop exit condition
-		if (runtime_sec > -1)
+		if (runtime_sec > -1)	//If a run time argument was provided, check if time to exit
 		{
-			if (currentTime.tv_sec >= start_sec && currentTime.tv_sec < start_sec + runtime_sec)
-			{
-				main_stop_flag = 1;
-			} 
-	}
-			} 
-	}
-			} 
+			if (currentTime.tv_sec >= start_sec + runtime_sec) main_stop_flag = 1;
 		}
-
 	}
 	while (!main_stop_flag);
 
@@ -390,7 +417,7 @@ int main( int argc, char *argv[])
 	close(mem_file);
 	fclose(csv);
 	close(spi_driver);
-
+	gpioTerminate();
 	printf("Exitted\n");
 
 	//Returns 0

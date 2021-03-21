@@ -7,4 +7,6 @@ OBJ=code.o
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 code: $(OBJ)
-	$(CC) -o $@ $^ $(CFLAGS) -lwiringPi -lxmlrpc_client -lxmlrpc  -lxmlrpc_xmlparse -lxmlrpc_xmltok -lxmlrpc_util -lpthread -lcurl
+	$(CC) -o $@ $^ $(CFLAGS) -lwiringPi
+
+new_code: 
