@@ -1,10 +1,11 @@
 #define _GNU_SOURCE
 #include <pthread.h>
+#include <pigpio.h>
 #include <signal.h>
 #include "code.h"
 
 // #define USE_PIGPIO	// uncomment to use pigpio routines for SPI and TDC clock
-// #define TDC_DEBUG	// uncomment to debug
+#define TDC_DEBUG	// uncomment to debug
 
 //CPU options
 #define POLLER_CORE 2	// isolated cpu core to execute pin polling					
@@ -215,7 +216,7 @@ uint32_t* setClockParams(int mem_file)
 }
 
 //Pin Configuration function
-void configurePins(int mem_file)
+int configurePins(int mem_file)
 {
 	//Sets up pin addresses and other under the hood stuff
 	if (gpioInitialise() < 0) 
@@ -261,7 +262,7 @@ int main( int argc, char *argv[])
 
 	gpioSetMode(LASER_ENABLE_PIN, PI_OUTPUT);
 	gpioSetMode(LASER_SHUTTER_PIN, PI_OUTPUT);
-	gpioSetMode(LASER_PULSE_PIN);
+	gpioSetMode(LASER_PULSE_PIN, PI_OUTPUT);
 
 	gpioWrite(LASER_PULSE_PIN, 0);
 	gpioWrite(LASER_SHUTTER_PIN,1);
@@ -357,7 +358,7 @@ int main( int argc, char *argv[])
 			//Sends a start pulse to the TDC (testing)
 			digitalWrite(PIN_START, 1);
 			digitalWrite(PIN_START, 0);
-
+			#endif
 			//Waits for 10 microseconds (testing)
 			delayMicroseconds(10);
 

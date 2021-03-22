@@ -17,23 +17,23 @@
 #define MIRROR_RPM 1000         // desired rotational speed of scanning mirror  
 
 //Start-of-scan definitions
-#define SOS_PIN 25              // physical pin 22; input for the start-of-scan detector output; 
+#define SOS_PIN 7               // physical pin 26; input for the start-of-scan detector output; 
 #define SOS_POLARITY 0          // SOS detector outputs LO when triggered
 #define SOS_DELAY_USEC 10       // How long to pause laser emission when SOS detector is triggered
 
 //Laser definitions
-#define LASER_ENABLE_PIN 5      // physical pin 29; must be TTL HI to allow emission
+#define LASER_ENABLE_PIN 26     // physical pin 37; must be TTL HI to allow emission
 #define LASER_SHUTTER_PIN 6     // physical pin 31; must be TTL HI to allow emission; wait 500 ms after raising
-#define LASER_PULSE_PIN 13      // physical pin 33; outputs trigger pulses to laser driver
+#define LASER_PULSE_PIN 23      // physical pin 16; outputs trigger pulses to laser driver
 
 //Laser driver serial definitions
 #define MLD_SERIAL_SERTTY "/dev/ttyAMA0"
 
 //TDC definitions
 #define TDC_CLK_PIN 4           // physical pin 7; must be a GPCLK0 pin
-#define TDC_ENABLE_PIN 17       // physical pin 11; active LO
-#define TDC_INT_PIN 27          // physical pin 13
-#define TDC_START_PIN 22        // physical pin 15
+#define TDC_ENABLE_PIN 27       // physical pin 13; active LO
+#define TDC_INT_PIN 22          // physical pin 15
+//#define TDC_START_PIN 23        // physical pin 16
 #define TDC_STOP_PIN 0          // physical pin 27
 #define TDC_CLK_FREQ 9600000    // reference clock frequency provided to TDC; allowed vals: 0 (off) or 4689 to 250M
 #define TDC_BAUD 15625000       // SPI baud rate;; divides 250MHz base SPI clock by a power of two (16 = 2^4) 

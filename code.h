@@ -36,7 +36,7 @@ int startMeas(int);
 double getToF(int);
 void readDataToFile(int, FILE*);
 void deconfigurePins(uint32_t*);
-void configurePins(int);
+int configurePins(int);
 uint32_t* setClockParams(int);
 
 #endif
