@@ -74,6 +74,8 @@ mld_msg_u mldExecuteCMD(mld_t* mld, uint64_t hex_cmd);
 //Open the serial module described by sertty and return a configured MLD struct
 mld_t* mldInit(char* sertty);
 
+int mldClose(mld_t* mld);
+
 //Use to verify serial connection and responsive MLD019 driver
 int16_t mldLinkControl(mld_t* mld);
 
@@ -117,9 +119,8 @@ uint32_t mldSWConfig(mld_t* mld);
 //or internal (internal PRR generator)
 uint32_t mldTrigConfig(mld_t* mld, mld_trig_t trig_src);
 
-
 //Sets/unsets the interlock/enable
-uint16_t mldLaserControl(mld_t* mld, mld_controls_t cntrl;
+uint16_t mldLaserControl(mld_t* mld, mld_controls_t cntrl);
 
 //sets the pulse repetition rate of the internal generator
 void mldSetPRR(mld_t* mld, uint16_t period_usec);
