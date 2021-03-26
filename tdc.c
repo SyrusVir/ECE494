@@ -50,9 +50,9 @@ typedef struct TDC {
 } tdc_t;
 
 //convert a subset of a byte array into a 32-bit number
-uint32_t convertSubsetToLong(uint8_t* start, int len, bool big_endian)
+uint32_t convertSubsetToLong(char* start, int len, bool big_endian)
 {
-    /**Parameters: uint8_t* start - pointer to first element in byte array subset
+    /**Parameters: char* start - pointer to first element in byte array subset
      *             int len - number of elements, max 4, in the subset
      *             bool big_endian - if true, the first element of start is considerd the MSB
      * Returns: 
@@ -102,112 +102,118 @@ int main ()
     //Clear CONFIG2 to configure 2 calibration clock periods,
     // no averaging, and single stop signal operation
     uint8_t cal_periods = 2;
-    uint8_t tx_buff[] = {0x41, 0x00};
+    char tx_buff[] = {0x41, 0x00};
     spiWrite(tdc.spi_handle, tx_buff, sizeof(tx_buff));
     /****************************************/
     
-    static const uint8_t meas_commands[2] = {
+    static char meas_commands[2] = {
         0x40,   //Write to CONFIG1
         0x43    //Start measurement in mode 2 with parity and rising edge start, stop, trigger signals 
     };
 
-    static const uint8_t tof_commands[5] = {    // TDC commands for retrieving TOF
-        0x10,   //Read TIME1
-        0x11,   //Read CLOCK_COUNT1
-        0x12,   //Read TIME2
-        0x1B,   //Read CALIBRATION
-        0x1C    //Read CALIBRATION2
-    };
-
-    //start new measurement on TDC
-    spiWrite(tdc.spi_handle, meas_commands, sizeof(meas_commands));
-    gpioDelay(10);  // small delay to allow TDC to process data
-    gpioTrigger(TDC_START_PIN,1,1);
-
-    //DEBUGGING: wait a know period of time and send a stop pulse
-    gpioDelay(500);
-    gpioTrigger(TDC_STOP_PIN,1,1);
-
-    //Poll TDC INT pin to signal available data
-    uint32_t curr_tick = gpioTick();
-    uint32_t stop_tick = curr_tick + TDC_TIMEOUT_USEC;
-    while (gpioRead(tdc.int_pin) && curr_tick < stop_tick) curr_tick = gpioTick();
-    
-    if (curr_tick < stop_tick) //if TDC returned in time
+    while (1)
     {
-        //Extracting ToF from TDC///////////
-        uint32_t time1;
-        uint32_t clock_count1;
-        uint32_t time2;
-        uint32_t clock_count2;
-        uint32_t calibration1;
-        uint32_t calibration2;  
-        
-        #ifdef AUTOINC_METHOD
-        //Transaction 1
-        uint8_t tx_buff1[13] = {0x90};    // start an auto incrementing read to read TIME1, CLOCK_COUTN1, TIME2, CLOCK_COUNT2 in a single command
-        uint8_t rx_buff1[sizeof(tx_buff1)];
-        int bytes_xfer = spiXfer(tdc.spi_handle, tx_buff1, rx_buff1, sizeof(tx_buff1));
-        if (bytes_xfer < sizeof(tx_buff1))
-        {
-            printf("Transaction 2: Only %d bytes received out of %d\n", bytes_xfer, sizeof(tx_buff1));
-        } 
-        printf("rx_buff1=%s\n");
+        char c;
+        printf("Enter any character to begin a TDC measurement.\n");
+        printf("Enter 'q' or 'Q' to quit.\n");
+        scanf(" %c ", &c);
+        if (c == 'q' || c == 'Q') break;
 
-        //Transaction 2
-        uint8_t tx_buff2[7] = {TDC_CMD(1,0,TDC_CALIBRATION1)};  //auto incrementing read of CALIBRATION1 and CALIBRATION2
-        uint8_t rx_buff2[sizeof(tx_buff2)]; 
-        uint16_t bytes_xfer = spiXfer(tdc.spi_handle, tx_buff2, rx_buff2, sizeof(tx_buff2));
-        if (bytes_xfer < sizeof(tx_buff2))
-        {
-            printf("Transaction 2: Only %d bytes received out of %d\n", bytes_xfer, sizeof(tx_buff2));
-        } 
-        printf("rx_buff2=%s\n");
+        //start new measurement on TDC
+        spiWrite(tdc.spi_handle, meas_commands, sizeof(meas_commands));
+        gpioDelay(10); // small delay to allow TDC to process data
+        gpioTrigger(TDC_START_PIN, 1, 1);
 
-        time1 = convertSubsetToLong(rx_buff1+1,3,1);
-        clock_count1 = convertSubsetToLong(rx_buff1+4,3,1);
-        time2 = convertSubsetToLong(rx_buff1+7,3,1);
-        clock_count2 = convertSubsetToLong(rx_buff1+10,3,1);
-        calibration1 = convertSubsetToLong(rx_buff2+1,3,1);
-        calibration2 = convertSubsetToLong(rx_buff2+4,3,1);
-        #else
-        uint32_t tdc_data[6]; // array to hold TIME1, CLOCK_COUNT1, TIME2, CLOCK_COUNT2, CALIBRATION1, CALIBRATION2 in that order
-        for(int i = 0; i < sizeof(tof_commands); i++)
+        //DEBUGGING: wait a know period of time and send a stop pulse
+        gpioDelay(500);
+        gpioTrigger(TDC_STOP_PIN, 1, 1);
+
+        //Poll TDC INT pin to signal available data
+        uint32_t curr_tick = gpioTick();
+        uint32_t stop_tick = curr_tick + TDC_TIMEOUT_USEC;
+        while (gpioRead(tdc.int_pin) && curr_tick < stop_tick)
+            curr_tick = gpioTick();
+
+        if (curr_tick < stop_tick) //if TDC returned in time
         {
-            uint8_t tx_buff1[4] = {tof_commands[i]}
-            uint8_t rx_buff1[sizeof(tx_buff1)];
+            //Extracting ToF from TDC///////////
+            uint32_t time1;
+            uint32_t clock_count1;
+            uint32_t time2;
+            uint32_t calibration1;
+            uint32_t calibration2;
+
+            #ifdef AUTOINC_METHOD
+            //Transaction 1
+            char tx_buff1[10] = {0x90}; // start an auto incrementing read to read TIME1, CLOCK_COUTN1, TIME2 in a single command
+            char rx_buff1[sizeof(tx_buff1)];
             int bytes_xfer = spiXfer(tdc.spi_handle, tx_buff1, rx_buff1, sizeof(tx_buff1));
-            print("rx_buff1 = %s\n", rx_buff1);
-            tdc_data[i] = convertSubsetToLong(rx_buff1)
-            print("rx_buff1 converted= %u\n", tdc_data[i]);
-        }
+            if (bytes_xfer < sizeof(tx_buff1))
+            {
+                printf("Transaction 2: Only %d bytes received out of %d\n", bytes_xfer, sizeof(tx_buff1));
+            }
+            printf("rx_buff1=%s\n", rx_buff1);
 
-        time1          = tdc_data[0];
-        clock_count1   = tdc_data[1];
-        time2          = tdc_data[2];
-        clock_count2   = tdc_data[3];
-        calibration1   = tdc_data[4];
-        calibration2   = tdc_data[5];
-        #endif
-        
-        printf("time1=%u\n", time1);
-        printf("clock_count1=%u\n", clock_count1);
-        printf("time2=%u\n", time2);
-        printf("clock_count2=%u\n", clock_count2);
-        printf("calibration1=%u\n", calibration1);
-        printf("calibration2=%u\n", calibration2);
+            //Transaction 2
+            char tx_buff2[7] = {TDC_CMD(1, 0, TDC_CALIBRATION1)}; //auto incrementing read of CALIBRATION1 and CALIBRATION2
+            char rx_buff2[sizeof(tx_buff2)];
+            bytes_xfer = spiXfer(tdc.spi_handle, tx_buff2, rx_buff2, sizeof(tx_buff2));
+            if (bytes_xfer < sizeof(tx_buff2))
+            {
+                printf("Transaction 2: Only %d bytes received out of %d\n", bytes_xfer, sizeof(tx_buff2));
+            }
+            printf("rx_buff2=%s\n", rx_buff2);
 
-        double ToF;
-        double calCount = (calibration2 - calibration1) / (double)(cal_periods - 1);
-        double normLSB = 1 / (calCount * tdc.clk_freq);
-        if (!calCount) ToF = 0; // catch divide-by-zero error
-        else
+            time1 = convertSubsetToLong(rx_buff1 + 1, 3, 1);
+            clock_count1 = convertSubsetToLong(rx_buff1 + 4, 3, 1);
+            time2 = convertSubsetToLong(rx_buff1 + 7, 3, 1);
+            calibration1 = convertSubsetToLong(rx_buff2 + 1, 3, 1);
+            calibration2 = convertSubsetToLong(rx_buff2 + 4, 3, 1);
+            #else
+            static char tof_commands[5] = {
+                // TDC commands for retrieving TOF
+                0x10, //Read TIME1
+                0x11, //Read CLOCK_COUNT1
+                0x12, //Read TIME2
+                0x1B, //Read CALIBRATION
+                0x1C  //Read CALIBRATION2
+            };
+            uint32_t tdc_data[sizeof(tof_commands)]; // array to hold TIME1, CLOCK_COUNT1, TIME2, CLOCK_COUNT2, CALIBRATION1, CALIBRATION2 in that order
+            for (int i = 0; i < sizeof(tof_commands); i++)
+            {
+                uint8_t tx_buff1[4] = {tof_commands[i]} uint8_t rx_buff1[sizeof(tx_buff1)];
+                int bytes_xfer = spiXfer(tdc.spi_handle, tx_buff1, rx_buff1, sizeof(tx_buff1));
+                print("rx_buff1 = %s\n", rx_buff1);
+                tdc_data[i] = convertSubsetToLong(rx_buff1)
+                    print("rx_buff1 converted= %u\n", tdc_data[i]);
+            }
+
+            time1 = tdc_data[0];
+            clock_count1 = tdc_data[1];
+            time2 = tdc_data[2];
+            calibration1 = tdc_data[3];
+            calibration2 = tdc_data[4];
+            #endif
+
+            printf("time1=%u\n", time1);
+            printf("clock_count1=%u\n", clock_count1);
+            printf("time2=%u\n", time2);
+            printf("calibration1=%u\n", calibration1);
+            printf("calibration2=%u\n", calibration2);
+
+            double ToF;
+            double calCount = (calibration2 - calibration1) / (double)(cal_periods - 1);
+            if (!calCount)
+                ToF = 0; // catch divide-by-zero error
+            else
+            {
+                ToF = ((time1 - time2) / calCount + clock_count1) / tdc.clk_freq * 1E6;
+                printf("ToF = %f usec\n", ToF);
+            }
+        } // end if (curr_tick < stop_tick), i.e. no timeout waiting for TDC
+        else //else timeout occured
         {
-            ToF
+            printf("TDC timeout occured\n");
         }
-    } // end if (curr_tick < stop_tick), i.e. no timeout waiting for TDC
-    else //else timeout occured
-    {
-        printf("TDC timeout occured\n");
-    }
-}
+    } // end while(1)
+} // end main()

@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-uint32_t convertSubsetToLong(uint8_t* start, int len, bool big_endian)
+uint32_t convertSubsetToLong(char* start, int len, bool big_endian)
 {
     /**Parameters: uint8_t* start - pointer to first element in byte array subset
      *             int len - number of elements, max 4, in the subset
@@ -23,18 +23,11 @@ uint32_t convertSubsetToLong(uint8_t* start, int len, bool big_endian)
 
 int main ()
 {
-    uint8_t data[13] = {0x00, 0x04, 0x04, 0x30, 0x22, 0xFF,
+    char data[13] = {0x00, 0x04, 0x04, 0x30, 0x22, 0xFF,
                         0x34, 0x34, 0x9f, 0xEE, 0xA2, 0x5C, 0x87};
 
     printf("%X\n",convertSubsetToLong(data+1,3,1));
     printf("\n");
     printf("%X\n",convertSubsetToLong(data+1,3,0));
-
-    uint8_t test[4] = {0x2};
-
-    for (int i = 0; i < 4; i++)
-    {
-        printf("%hu ", test[i]);
-    }
 
 } 
