@@ -374,12 +374,7 @@ int main( int argc, char *argv[])
 			{
 				main_stop_flag = 1;
 			} 
-	}
-			} 
-	}
-			} 
 		}
-
 	}
 	while (!main_stop_flag);
 
