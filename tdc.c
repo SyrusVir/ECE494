@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include <linux/spi/spidev.h>
 
-// #define AUTOINC_METHOD
+#define AUTOINC_METHOD
 #define PIGPIO
 
 //TDC register addresses; easier to define using enum
@@ -49,7 +49,7 @@ enum TDC_REG_ADDR {
 #define TDC_CLK_PIN 4   // physical pin 7; GPIOCLK0 for TDC reference
 #define TDC_ENABLE_PIN 27   // physical pin 13; TDC Enable
 #define TDC_INT_PIN 22  // physical pin 15; TDC interrupt pin
-#define TDC_BAUD (uint32_t)20E6
+#define TDC_BAUD (uint32_t) 20E6
 #define TDC_START_PIN 23         // physical pin 16; provides TDC start signal for debugging 
 #define TDC_STOP_PIN 18         // physical pin 12; provides TDC stop signal for debugging 
 #define TDC_TIMEOUT_USEC (uint32_t)5E6
@@ -110,7 +110,7 @@ uint32_t convertSubsetToLong(char* start, int len, bool big_endian)
         out |= (start[(big_endian ? len - 1 - i : i)] << 8*i);
     }
 
-    return out;
+    return out; 
 }
 
 int main () 
@@ -122,6 +122,7 @@ int main ()
         .clk_freq = TDC_CLK_FREQ
     };
 
+    gpioCfgClock(1, 1,0); //1us sample rate, PCM clock
     gpioInitialise();
 
     #ifndef PIGPIO
@@ -157,8 +158,8 @@ int main ()
     gpioWrite(tdc.enable_pin, 0);
     gpioDelay(5000);
     gpioWrite(tdc.enable_pin,1);
-    gpioDelay(5000);
-    gpioWrite(tdc.enable_pin, 0);
+    // gpioDelay(5000);
+    // gpioWrite(tdc.enable_pin, 0);
 
     //Non-incrementing write to CONFIG2 reg (address 0x01)
     //Clear CONFIG2 to configure 2 calibration clock periods,
@@ -176,7 +177,7 @@ int main ()
     
     static char meas_commands[2] = {
         0x40,   //Write to CONFIG1
-        0x43    //Start measurement in mode 2 with parity and rising edge start, stop, trigger signals 
+        0x03    //Start measurement in mode 2 withOUT parity and rising edge start, stop, trigger signals 
     };
 
     while (1)
@@ -193,12 +194,12 @@ int main ()
         printArray(rx_buff, sizeof(meas_commands));
         free(rx_buff);
 
-        gpioDelay(10); // small delay to allow TDC to process data
-        gpioTrigger(TDC_START_PIN, 5, 1);
-
+        gpioDelay(100); // small delay to allow TDC to process data
+        
         //DEBUGGING: wait a know period of time and send a stop pulse
-        gpioDelay(500);
-        gpioTrigger(TDC_STOP_PIN, 5, 1);
+        gpioTrigger(TDC_START_PIN, 1, 1);
+        // gpioDelay(5);
+        gpioTrigger(TDC_STOP_PIN, 1, 1);
 
         //Poll TDC INT pin to signal available data
         uint32_t curr_tick = gpioTick();
@@ -220,7 +221,7 @@ int main ()
 
             #ifdef AUTOINC_METHOD
             //Transaction 1
-            char tx_buff1[10] = {0x90}; // start an auto incrementing read to read TIME1, CLOCK_COUTN1, TIME2 in a single command
+            char tx_buff1[10] = {0x90}; // start an auto incrementing read to read TIME1, CLOCK_COUNT1, TIME2 in a single command
             // char rx_buff1[sizeof(tx_buff1)];
             char* rx_buff1 = spiTransact(tdc.spi_handle, tx_buff1, sizeof(tx_buff1));
             // int bytes_xfer = spiXfer(tdc.spi_handle, tx_buff1, rx_buff1, sizeof(tx_buff1));
@@ -229,11 +230,11 @@ int main ()
             //     printf("Transaction 2: Only %d bytes received out of %d\n", bytes_xfer, sizeof(tx_buff1));
             // }
             printf("rx_buff1 =");
-                printArray(rx_buff1, sizeof(tx_buff1));
+            printArray(rx_buff1, sizeof(tx_buff1));
 
             //Transaction 2
             char tx_buff2[7] = {TDC_CMD(1, 0, TDC_CALIBRATION1)}; //auto incrementing read of CALIBRATION1 and CALIBRATION2
-            char rx_buff2[sizeof(tx_buff2)];
+            //char rx_buff2[sizeof(tx_buff2)];
             char* rx_buff2 = spiTransact(tdc.spi_handle, tx_buff2, sizeof(tx_buff2));
             // bytes_xfer = spiXfer(tdc.spi_handle, tx_buff2, rx_buff2, sizeof(tx_buff2));
             // if (bytes_xfer < sizeof(tx_buff2))
@@ -263,9 +264,9 @@ int main ()
                 char tx_buff1[4] = {tof_commands[i]};
                 // char rx_buff1[sizeof(tx_buff1)];
                 char* rx_buff1 = spiTransact(tdc.spi_handle, tx_buff1, sizeof(tx_buff1));
-                printf("rx_buff1 =");
+                printf("%d) rx_buff1 =", i);
                 printArray(rx_buff1, sizeof(tx_buff1));
-                tdc_data[i] = convertSubsetToLong(rx_buff1+1, sizeof(tx_buff1) - 1,true);
+                tdc_data[i] = convertSubsetToLong(rx_buff1, sizeof(tx_buff1),true);
                 printf("rx_buff1 converted= %u\n", tdc_data[i]);
             }
 
@@ -288,7 +289,7 @@ int main ()
                 ToF = 0; // catch divide-by-zero error
             else
             {
-                ToF = ((time1 - time2) / calCount + clock_count1) / tdc.clk_freq * 1E6;
+                ToF = (((double)time1 - time2) / calCount + clock_count1) / tdc.clk_freq * 1E6;
                 printf("ToF = %f usec\n", ToF);
             }
         } // end if (curr_tick < stop_tick), i.e. no timeout waiting for TDC
