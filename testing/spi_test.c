@@ -11,7 +11,7 @@
 // #include <unistd.h>
 // //#include <linux/spi/spidev.h>
 
-#define PIGPIO
+// #define PIGPIO
 #define BAUD (unsigned int)20e6
 
 void printCharArray(char* arr, int arr_size)
