@@ -56,6 +56,12 @@ enum TDC_REG_ADDR {
 #define TDC_TIMEOUT_USEC (uint32_t)5E6
 #define TDC_CLK_FREQ (uint32_t)19.2E6/2
 
+//Laser definitions
+#define LASER_PULSE_PIN 23 //physical pin 16
+#define LASER_SHUTTER_PIN
+#define LASER_ENABLE_PIN
+
+
 typedef struct TDC {
     uint8_t clk_pin;    // Proivdes TDC reference clock
     uint8_t enable_pin; // active HIGH
@@ -192,7 +198,7 @@ int main ()
     char config2_rx[sizeof(config2_cmds)];
 
     // char* config2_rx = spiTransact(tdc.spi_handle, config2_cmds, sizeof(config2_cmds));
-    printf("config2 spiWrite=%d",spiTransact(tdc.spi_handle, config2_cmds, config2_rx, sizeof(config2_cmds)));    
+    printf("config2 spiWrite=%d\n",spiTransact(tdc.spi_handle, config2_cmds, config2_rx, sizeof(config2_cmds)));    
     printf("config2_rx=");
     printArray(config2_rx, sizeof(config2_rx));
     /****************************************/
@@ -202,15 +208,17 @@ int main ()
         //first reset START & STOP pins
         gpioWrite(TDC_START_PIN, 0);
         gpioWrite(TDC_STOP_PIN, 0);
-        
 
         /******** User input *******/
         float f;
-        printf("Enter a positive number (floats allowed) to begin a TDC measurement.\n");
-        printf("The provided number will be the delay between the TDC START and STOP signals.\n");
-        printf("Enter a negative number to quit.\n");
-        scanf(" %f", &f);
-        if (f < 0) break;
+        char c;
+        // printf("Enter a positive number (floats allowed) to begin a TDC measurement.\n");
+        // printf("The provided number will be the delay between the TDC START and STOP signals.\n");
+        // printf("Enter a negative number to quit.\n");
+        // scanf(" %f", &f);
+        printf("Enter a char to start a measurement. q or Q to quit.\n");
+        scanf(" %c", &c);
+        if (c == 'q' || c == 'Q') break;
         /***************************/
 
         /******** Starting Measurement ********/
@@ -220,19 +228,21 @@ int main ()
             0x43    //Start measurement in mode 2 with parity and rising edge start, stop, trigger signals 
         };
         char meas_cmds_rx[sizeof(meas_cmds)];
-        printf("measurement start spiWrite=%d", spiTransact(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds))); //start new measurement on TDC
+        printf("measurement start spiWrite=%d\n", spiTransact(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds))); //start new measurement on TDC
         gpioDelay(10); // small delay to allow TDC to process data
         /**************************************/
         
         /********* Simulate Single Photon Detector *******/
         gpioWrite(TDC_START_PIN, 1);
-        if (!f) gpioDelay((uint32_t) f);
+        gpioDelay(5);
         gpioWrite(TDC_STOP_PIN, 1);
         /*************************************************/
 
+        printf("AFter debug pulse\n");
+
         //Poll TDC INT pin to signal available data
         uint32_t start_tick = gpioTick();
-        while (gpioRead(tdc.int_pin) && (gpioTick() - start_tick) < TDC_TIMEOUT_USEC)
+        while (gpioRead(tdc.int_pin) && (gpioTick() - start_tick) < TDC_TIMEOUT_USEC);
 
         // ToF Calculation
         if (!gpioRead(tdc.int_pin)) //if TDC INT was pulled low in time
@@ -275,7 +285,6 @@ int main ()
             bool valid_data_flag = true; 
             /*******************************************/
 
-
             #ifdef AUTOINC_METHOD
             /******** Transaction 1 *********/
             /**Transaction 1 starts an auto-incrementing read at register TIME1,
@@ -311,7 +320,7 @@ int main ()
              */
             for (uint8_t i = 0; i < sizeof(rx_data_idx)/sizeof(*rx_data_idx); i++)
             {
-                uint32_t conv = convertSubsetToLong(rx_buff[rx_data_idx[i]], 3, true);
+                uint32_t conv = convertSubsetToLong(rx_buff+rx_data_idx[i], 3, true);
                 if (checkOddParity(conv)) 
                 {
                     valid_data_flag = false;
@@ -351,6 +360,8 @@ int main ()
             }
             #endif
 
+            printf("valid=%d", valid_data_flag);
+            
             if (valid_data_flag) 
             {
                 time1 = tdc_data[0];
@@ -377,6 +388,7 @@ int main ()
             else
             {
                 // if any invalid data retrieved from TDC, set negative ToF
+                printf("Invalid data\n");
                 ToF = -1;
             } //end else linked to if (valid_data_flag)
         } // end if (!gpioRead(tdc.int_pin)), i.e. no timeout waiting for TDC
