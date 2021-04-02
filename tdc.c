@@ -12,8 +12,9 @@
 #include <unistd.h>
 #include <linux/spi/spidev.h>
 
-// #define AUTOINC_METHOD
+#define AUTOINC_METHOD
 #define PIGPIO
+// #define DEBUG
 
 //TDC register addresses; easier to define using enum
 enum TDC_REG_ADDR {
@@ -53,7 +54,7 @@ enum TDC_REG_ADDR {
 #define TDC_START_PIN 23         // physical pin 16; provides TDC start signal for debugging 
 #define TDC_STOP_PIN 18         // physical pin 12; provides TDC stop signal for debugging 
 #define TDC_TIMEOUT_USEC (uint32_t)5E6
-#define TDC_CLK_FREQ (uint32_t)19.2E6/2
+#define TDC_CLK_FREQ (uint32_t)19.2E6/1
 
 //Laser pin defintions
 #define LASER_ENABLE_PIN 26     // physical pin 37; must be TTL HI to allow emission
@@ -172,8 +173,6 @@ int main ()
     gpioWrite(tdc.enable_pin, 0);
     gpioDelay(5000);
     gpioWrite(tdc.enable_pin,1);
-    // gpioDelay(5000);
-    // gpioWrite(tdc.enable_pin, 0);
 
     //Non-incrementing write to CONFIG2 reg (address 0x01)
     //Clear CONFIG2 to configure 2 calibration clock periods,
@@ -198,6 +197,9 @@ int main ()
     {
         static bool shutter_state = 0;
         static bool enable_state = 0;
+
+        gpioWrite(TDC_START_PIN,0);
+        gpioWrite(TDC_STOP_PIN,0);
 
         char c;
         printf("Enter S to toggle shutter.\n");
@@ -226,6 +228,14 @@ int main ()
             printArray(rx_buff, sizeof(meas_commands));
             free(rx_buff);
             gpioDelay(10); // small delay to allow TDC to process data
+
+            #ifdef DEBUG
+            //DEBUGGING: wait a know period of time and send a stop pulse
+            gpioWrite(TDC_START_PIN, 1);
+            gpioDelay(5);
+            gpioWrite(TDC_STOP_PIN, 1);
+            #else
+            // send train of laser pulses
             for (int i = 0; i < LASER_PULSE_COUNT; i++)
             {
                 gpioWrite(LASER_PULSE_PIN,1);
@@ -233,18 +243,13 @@ int main ()
                 gpioWrite(LASER_PULSE_PIN,0);
                 gpioDelay(LASER_PULSE_PERIOD/2);
             }
+            #endif
         }
         else continue;
 
-        
-        //DEBUGGING: wait a know period of time and send a stop pulse
-        // gpioTrigger(TDC_START_PIN, 1, 1);
-        // gpioDelay(5);
-        // gpioTrigger(TDC_STOP_PIN, 1, 1);
 
         //Poll TDC INT pin to signal available data
         uint32_t curr_tick = gpioTick();
-        uint32_t stop_tick = curr_tick + TDC_TIMEOUT_USEC;
         while (gpioRead(tdc.int_pin) && (gpioTick() - curr_tick)  < TDC_TIMEOUT_USEC);
 
         if (!gpioRead(tdc.int_pin)) //if TDC returned in time
