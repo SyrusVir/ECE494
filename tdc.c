@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <linux/spi/spidev.h>
 
+#define LIGHT_SPEED 299792458.0
+
 #define AUTOINC_METHOD
 #define PIGPIO
 // #define DEBUG
@@ -43,9 +45,42 @@ enum TDC_REG_ADDR {
     TDC_CALIBRATION2
 };
 
+enum TDC_CAL2_PERIODS
+{
+    TDC_CAL2_2,
+    TDC_CAL2_10,
+    TDC_CAL2_20,
+    TDC_CAL2_40
+};
+
+enum TDC_AVG_CYCLES
+{
+    TDC_AVG_1CYC,
+    TDC_AVG_2CYC,
+    TDC_AVG_4CYC,
+    TDC_AVG_8CYC,
+    TDC_AVG_16CYC,
+    TDC_AVG_32CYC,
+    TDC_AVG_64CYC,
+    TDC_AVG_128CYC
+};
+
 //communication related definitions
 #define TDC_CMD(auto_inc, write, tdc_addr) (auto_inc << 7) | (write << 6) | (tdc_addr)
 #define TDC_PARITY_MASK 0x00800000  // bit mask for extracting parity bit from 24-bit data registers (TIMEn, CLOCK_COUNTN, etc.)
+#define TDC_CONFIG1_BITS(force_cal, parity, trigg_edge, stop_edge, start_edge, mode, start_meas) \
+    (force_cal << 7)  | \
+    (parity << 6)     | \
+    (trigg_edge << 5) | \
+    (stop_edge << 4)  | \
+    (start_edge << 3) | \
+    (mode << 1)       | \
+    (start_meas)
+
+#define TDC_CONFIG2_BITS(cal_periods, avg_cycles, num_stop) \
+    (cal_periods << 6) |    \
+    (avg_cycles << 3)  |    \
+    ((num_stop - 1))  
 
 //TEST definitions
 #define TDC_CLK_PIN 4   // physical pin 7; GPIOCLK0 for TDC reference
@@ -101,7 +136,38 @@ bool checkOddParity(uint32_t n)
     }
 
     return n & 1;
-} // end getParity
+} // end checkOddParity
+
+double calcToF(uint32_t* tdc_data, uint32_t cal_periods, uint32_t clk_freq)
+{
+    double ToF;
+    double time1 = tdc_data[0];
+    uint32_t clock_count1 = tdc_data[1];
+    uint32_t time2 = tdc_data[2];
+    uint32_t calibration1 = tdc_data[3];
+    double calibration2 = tdc_data[4];
+
+    printf("time1=%u\n", time1);
+    printf("clock_count1=%u\n", clock_count1);
+    printf("time2=%u\n", time2);
+    printf("calibration1=%u\n", calibration1);
+    printf("calibration2=%u\n", calibration2);
+
+    double calCount = (calibration2 - calibration1) / (double)(cal_periods - 1);
+    if (!calCount)
+        return 0; // catch divide-by-zero error
+    else
+    {
+        ToF = ((time1 - time2) / calCount + clock_count1) / clk_freq * 1E6;
+        printf("ToF = %f usec\n", ToF);
+        return ToF;
+    }
+}
+
+inline double calcDistance(double ToF)
+{
+    return ToF/LIGHT_SPEED/2;
+}
 
 int spiTransact(int fd, char* tx_buf, char* rx_buf, int count)
 {   
