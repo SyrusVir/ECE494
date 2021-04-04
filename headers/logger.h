@@ -9,6 +9,13 @@
 #include <time.h>
 #include <fifo.h>
 
+typedef enum LoggerState {
+    LOGGER_STATE_UNINIT,
+    LOGGER_STATE_IDLE,
+    LOGGER_STATE_LOGGING,
+    LOGGER_STATE_CLOSED
+} logger_state_t;
+
 typedef enum LoggerCommand {
     LOG,
     CLOSE
@@ -20,7 +27,6 @@ typedef struct LoggerMessage {
     char *path;
     char *data;
 } logger_msg_t;
-
 
 typedef struct Logger {
     fifo_buffer_t *buffer;
