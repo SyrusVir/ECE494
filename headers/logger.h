@@ -7,7 +7,14 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <fifo.h>
+#include "fifo.h"
+
+typedef enum LoggerStatus {
+    LOGGER_UNINIT,
+    LOGGER_IDLE,
+    LOGGER_WORKING,
+    LOGGER_STOPPED
+} logger_status_t;
 
 typedef enum LoggerState {
     LOGGER_STATE_UNINIT,
@@ -17,8 +24,8 @@ typedef enum LoggerState {
 } logger_state_t;
 
 typedef enum LoggerCommand {
-    LOG,
-    CLOSE
+    LOGGER_LOG,
+    LOGGER_STOP
 } logger_cmd_t;
 
 typedef struct LoggerMessage {
@@ -31,6 +38,7 @@ typedef struct LoggerMessage {
 typedef struct Logger {
     fifo_buffer_t *buffer;
     char *stat_log_path;
+    logger_status_t status;
 } logger_t; 
 
 //CORE FUNCTION

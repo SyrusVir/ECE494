@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <linux/spi/spidev.h>
 
+#include <logger.h>
+
 #define LIGHT_SPEED 299792458.0
 
 #define AUTOINC_METHOD
@@ -81,6 +83,7 @@ enum TDC_AVG_CYCLES
     (cal_periods << 6) |    \
     (avg_cycles << 3)  |    \
     ((num_stop - 1))  
+#define TDC_CAL_PERIODS 2
 
 //TEST definitions
 #define TDC_CLK_PIN 4   // physical pin 7; GPIOCLK0 for TDC reference
@@ -138,6 +141,9 @@ bool checkOddParity(uint32_t n)
     return n & 1;
 } // end checkOddParity
 
+/**Assumes tdc_data to be a 5-element array of uint32_t of the following form:
+ * [TIME1],[CLOCK_COUNT1],[TIME2],[CALIBRATION1],[CALIBRATION2] 
+ */
 double calcToF(uint32_t* tdc_data, uint32_t cal_periods, uint32_t clk_freq)
 {
     double ToF;
@@ -164,7 +170,7 @@ double calcToF(uint32_t* tdc_data, uint32_t cal_periods, uint32_t clk_freq)
     }
 }
 
-inline double calcDistance(double ToF)
+inline double calcDist(double ToF)
 {
     return ToF/LIGHT_SPEED/2;
 }
@@ -214,63 +220,112 @@ uint32_t convertSubsetToLong(char* start, int len, bool big_endian)
     return out; 
 } // end convertSubsetToLong
 
+int tdcInit(tdc_t* tdc, int baud)
+{
+    int status = gpioInitialise();
+    if (status < 0) return status;
+    else
+    {
+        #ifndef PIGPIO
+        /******** spidev init ********/
+        tdc.spi_handle = open("/dev/spidev0.0", O_RDWR);
+        /*****************************/
+        #else
+        /******** Pigpio SPI init ********/
+        tdc->spi_handle = spiOpen(0, TDC_BAUD, 0
+                /* 0b00 |          // Positive (MSb 0) clock edge centered (LSb 0) on data bit
+                (0b000 << 2) |  // all 3 CE pins are active low
+                (0b000 << 5) |  // all 3 CE pins reserved for SPI
+                (0 << 8) |      // 0 = Main SPI; 1 = Aux SPI 
+                (0 << 9) |      // If 1, 3-wire mode
+                ((0 & 0xF) << 10) | // bytes to write before switching to read (N/A if not in 3-wire mode)
+                (0 << 14) |         // If 1, tx LSb first (Aux SPI only)
+                (0 << 15) |         // If 1, recv LSb first (Aux SPI only)
+                ((8 & 0x3F) << 16)  // bits per word; 0 defaults to 8 */
+
+        );
+        /******************************/
+        #endif
+
+        gpioHardwareClock(tdc->clk_pin,tdc->clk_freq);// start TDC reference clock
+        gpioSetMode(tdc->enable_pin, PI_OUTPUT);     // active HI
+        gpioSetMode(tdc->int_pin, PI_INPUT);         // active LOW 
+        return 0;
+    }
+
+} // end tdcInit()
+
+/**Start Measurement TDC with the following settings
+ * - No calibration at measurement completion
+ * - Even parity enabled
+ * - Rising edge polarity for TRIGG, START, and STOP
+ * - Measurement mode 1
+ */
+int tdcStartMeas(tdc_t* tdc)
+{
+    char* tx_buff[2] = {
+        TDC_CMD(0, 1, TDC_CONFIG1), 
+        TDC_CONFIG1_BITS(0,1,0,0,0,0,1)
+        };
+
+    return spiTransact(tdc->spi_handle, tx_buff, NULL, sizeof(tx_buff));
+}
+
+double getEpochTime()
+{
+    static struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    return tv.tv_sec + tv.tv_usec *1E-6; 
+}
+
 int main () 
 {
+    /********* Threaded Logger Configuration ********/
+    pthread_t logger_tid;
+    logger_t* logger = loggerCreate(100);
+
+    // start loggerMain, passing the configured logger struct as argument
+    pthread_create(&logger_tid, NULL, &loggerMain, logger); 
+    /************************************************/
+
+    printf("LASER_PULSE_PERIOD= %f\n", LASER_PULSE_PERIOD);
+
+    gpioCfgClock(1, PI_CLOCK_PCM,0); //1us sample rate, PCM clock
+    gpioInitialise();
+
+    /******** TDC Initialization *********/
+    // opens SPI connection and configures assigned pins
     tdc_t tdc = {
         .enable_pin = TDC_ENABLE_PIN,
         .int_pin = TDC_INT_PIN,
         .clk_pin = TDC_CLK_PIN,
         .clk_freq = TDC_CLK_FREQ
     };
-    printf("LASER_PULSE_PERIOD= %f\n", LASER_PULSE_PERIOD);
-
-    gpioCfgClock(1, 1,0); //1us sample rate, PCM clock
-    gpioInitialise();
-
-    #ifndef PIGPIO
-    /******** spidev init ********/
-    tdc.spi_handle = open("/dev/spidev0.0", O_RDWR);
-    /*****************************/
-    #else
-    /******** Pigpio SPI init ********/
-    tdc.spi_handle = spiOpen(0, TDC_BAUD, 0
-            /* 0b00 |          // Positive (MSb 0) clock edge centered (LSb 0) on data bit
-            (0b000 << 2) |  // all 3 CE pins are active low
-            (0b000 << 5) |  // all 3 CE pins reserved for SPI
-            (0 << 8) |      // 0 = Main SPI; 1 = Aux SPI 
-            (0 << 9) |      // If 1, 3-wire mode
-            ((0 & 0xF) << 10) | // bytes to write before switching to read (N/A if not in 3-wire mode)
-            (0 << 14) |         // If 1, tx LSb first (Aux SPI only)
-            (0 << 15) |         // If 1, recv LSb first (Aux SPI only)
-            ((8 & 0x3F) << 16)  // bits per word; default 8 */
-
-    );
-    /******************************/
-    #endif
+    tdcInit(&tdc, TDC_BAUD);
 
     printf("tdc.spi_handle=%d\n",tdc.spi_handle);
-    gpioHardwareClock(tdc.clk_pin,tdc.clk_freq);
-    gpioSetMode(tdc.enable_pin, PI_OUTPUT);     // active HI
-    gpioSetMode(tdc.int_pin, PI_INPUT);         // active LOW        
-    // gpioSetPullUpDown(tdc.int_pin, PI_PUD_UP);  // INT pin is open drain, active LOW
+
+    // enable additional pins for debugging         
     gpioSetMode(TDC_START_PIN, PI_OUTPUT);     // active LOW
     gpioSetMode(TDC_STOP_PIN, PI_OUTPUT);     // active LOW
-    gpioSetMode(LASER_ENABLE_PIN, PI_OUTPUT);
-    gpioSetMode(LASER_PULSE_PIN, PI_OUTPUT);
-    gpioSetMode(LASER_SHUTTER_PIN, PI_OUTPUT);
-    
-    gpioWrite(LASER_SHUTTER_PIN,0);
-    gpioWrite(LASER_ENABLE_PIN,0);
     
     // TDC must see rising edge of ENABLE while powered for proper internal initializaiton
     gpioWrite(tdc.enable_pin, 0);
     gpioDelay(3); // Short delay to make sure TDC sees LOW before rising edge
     gpioWrite(tdc.enable_pin, 1);
+    /***************************************/
+
+    // Configure laser control pins
+    gpioSetMode(LASER_ENABLE_PIN, PI_OUTPUT);
+    gpioSetMode(LASER_PULSE_PIN, PI_OUTPUT);
+    gpioSetMode(LASER_SHUTTER_PIN, PI_OUTPUT);
+    gpioWrite(LASER_SHUTTER_PIN,0); // initialise to low
+    gpioWrite(LASER_ENABLE_PIN,0); // initialise to low
     
     //Non-incrementing write to CONFIG2 reg (address 0x01)
     //Clear CONFIG2 to configure 2 calibration clock periods,
     // no averaging, and single stop signal operation
-    uint8_t cal_periods = 2;
     char config2_cmds[] = {0x41, 0x00};
     char config2_rx[sizeof(config2_cmds)];
 
@@ -463,26 +518,7 @@ int main ()
             
             if (valid_data_flag) 
             {
-                time1 = tdc_data[0];
-                clock_count1 = tdc_data[1];
-                time2 = tdc_data[2];
-                calibration1 = tdc_data[3];
-                calibration2 = tdc_data[4];
-
-                printf("time1=%u\n", time1);
-                printf("clock_count1=%u\n", clock_count1);
-                printf("time2=%u\n", time2);
-                printf("calibration1=%u\n", calibration1);
-                printf("calibration2=%u\n", calibration2);
-
-                double calCount = (calibration2 - calibration1) / (double)(cal_periods - 1);
-                if (!calCount)
-                    ToF = 0; // catch divide-by-zero error
-                else
-                {
-                    ToF = (((double)time1 - time2) / calCount + clock_count1) / tdc.clk_freq * 1E6;
-                    printf("ToF = %f usec\n", ToF);
-                }
+                ToF = calcToF(tdc_data,TDC_CAL_PERIODS, tdc.clk_freq);
             } // end if (valid_data_flag)
             else
             {
@@ -490,6 +526,15 @@ int main ()
                 printf("Invalid data\n");
                 ToF = -1;
             } //end else linked to if (valid_data_flag)
+
+            double dist = calcDist(ToF);
+            double time = getEpochTime();
+
+            char data_str[50];
+            sprintf(data_str, "%lf,%lf,%lf\n", time, dist, ToF);
+
+            loggerSendLogMsg(logger, data_str, sizeof(data_str), "./tof_vals.txt", 0, true);
+            
         } // end if (!gpioRead(tdc.int_pin)), i.e. no timeout waiting for TDC
         else //else timeout occured
         {
@@ -502,7 +547,10 @@ int main ()
     #else
     close(tdc.spi_handle);
     #endif
-
+    
+    loggerSendCloseMsg(logger, 0, true);
+    pthread_join(logger_tid, NULL);
+    loggerDestroy(logger);
     gpioWrite(LASER_SHUTTER_PIN, 0);
     gpioWrite(LASER_ENABLE_PIN, 0);
     gpioTerminate();
