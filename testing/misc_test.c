@@ -2,44 +2,38 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <sys/time.h>
+#include <string.h>
 
-uint8_t getParity(uint32_t n)
+#define LIGHT_SPEED 299792458.0
+
+#define DATA_SEPARATOR ','
+
+double calcDist(double ToF)
 {
-
-    /**Calculate parity by repeatedly dividing the bits of n into halves
-     * and XORing them together
-     * 
-     * 8-bit example:
-     * n = b7b6b5b4b3b2b1b0
-     * n ^= (n >> 4) --> n = b7 b6 b5 b4 (b7^b3) (b6^b2) (b5^b1) (b4^b0)
-     * n ^= (n >> 2) --> n = b7 b6 b5 b4 (b7^b3) (b6^b2) (b7^b5^b3^b1) (b6^b4^b2^b0)
-     * n ^= (n >> 1) --> n = b7 b6 b5 b4 (b7^b3) (b6^b2) (b7^b5^b3^b1) (b7^b6^b5^b4^b3^b2^b1^b0)
-     * return n & 1 = return (b7^b6^b5^b4^b3^b2^b1^b0)
-     */        
-    for (size_t i = (sizeof(n)*8 >> 1); i > 0; i >>= 1)
-    {
-        n ^= (n >> i);
-    }
-
-    return n & 1;
+    return ToF*LIGHT_SPEED/2.0;
 }
 
-uint32_t convertSubsetToLong(char* start, int len, bool big_endian)
+
+double getEpochTime()
 {
-    /**Parameters: uint8_t* start - pointer to first element in byte array subset
-     *             int len - number of elements, max 4, in the subset
-     *             bool big_endian - if true, the first element of start is considerd the MSB
-     * Returns: 
-     */
+    static struct timeval tv;
+    gettimeofday(&tv, NULL);
 
-    len = (len > 4 ? 4 : len); //if len > 4, assign 4. OTW assign user-provided length
-    uint32_t out = 0;
-    for (int i = 0; i < len; i++)
-    {
-        out |= (start[(big_endian ? len - 1 - i : i)] << 8*i);
-    }
+    return tv.tv_sec + tv.tv_usec *1E-6; 
+}
 
-    return out;
+
+int buildDataStr(char* out_str, double timestamp, double distance, double ToF, bool add_break)
+{
+    
+    return sprintf(out_str, "%2$.6lf%1$c%3$.6lE%1$c%4$.6lE%5$s\n", 
+            DATA_SEPARATOR,
+            timestamp,
+            distance,
+            ToF,
+            (add_break ? "\n" : "")
+            );
 }
 
 int main (int argc, char** argv)
@@ -54,7 +48,7 @@ int main (int argc, char** argv)
  */
 
     // getParity test code
-
+/* 
     uint32_t data = 1;
     if (argc > 1)
     {
@@ -71,8 +65,18 @@ int main (int argc, char** argv)
     printf("\n");
 
     printf("parity of %u = %u\n", data, getParity(data));
+ */
 
-    uint32_t x[5];
-    printf("%d\n", sizeof(x));
+    // buildDataStr test code
+    double time = getEpochTime();
+    double ToF = 10E-6;
+    double dist = calcDist(ToF);
+
+    printf("time=%lf\tToF=%lf\tdist=%lf\n", time, ToF, dist);
+
+    char data_str[60];
+    int data_str_len = buildDataStr(data_str, time, dist, ToF, true);
+    printf("data_str=%s\n", data_str);
+    printf("data_str_size=%d\n", data_str_len);
     return 0;
 } 

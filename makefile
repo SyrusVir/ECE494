@@ -1,12 +1,25 @@
 CC=gcc
-DEPS=code.h
-CFLAGS=-g -Wall
-OBJ=code.o
+CFLAGS=-g -Wall -Wextra
+SRCDIR = $(CURDIR)/src
+INCDIR = $(CURDIR)/headers
+OBJDIR = $(CURDIR)/obj
+LIBFLAGS = -lpigpio -pthread
 
-%.o: %.c $(DEPS)
-	$(CC) -c -o $@ $< $(CFLAGS)
+fifo.o:
+	$(CC) $(CFLAGS) -c $(SRCDIR)/fifo.c -o $(OBJDIR)/$@ -I$(INCDIR) -pthread
 
-code: $(OBJ)
-	$(CC) -o $@ $^ $(CFLAGS) -lwiringPi
+tcp_handler.o: fifo.o
+	$(CC) $(CFLAGS) -c $(SRCDIR)/tcp_handler.c -o $(OBJDIR)/$@ -I$(INCDIR) -pthread
 
-new_code: 
+logger.o: fifo.o
+	$(CC) $(CFLAGS) -c $(SRCDIR)/logger.c -o $(OBJDIR)/$@ -I$(INCDIR) $(LIBFLAGS)
+
+data_processor.o: logger.o
+	$(CC) $(CFLAGS) -c $(SRCDIR)/data_processor.c -o $(OBJDIR)/$@ -I$(INCDIR) -I. -pthread
+
+tdc.o: logger.o
+	$(CC) $(CFLAGS) -c tdc.c -o $(OBJDIR)/$@ -I$(INCDIR) -I. $(LIBFLAGS)
+ 
+ .PHONY: clean
+ clean:
+	rm $(OBJDIR)/*.o

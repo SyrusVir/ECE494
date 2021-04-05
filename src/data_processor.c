@@ -5,22 +5,21 @@
 #include "fifo.h"
 #include "logger.h"
 #include "tcp_handler.h"
-#include "tdc.c"
+#include "tdc.h"
 
-#define DATA_SEPARATOR ','
 
 typedef enum DataProcStatus
 {
-    UNINIT,
-    IDLE,
-    WORKING,
-    CLOSED
+    DATAPROC_UNINIT,
+    DATAPROC_IDLE,
+    DATAPROC_WORKING,
+    DATAPROC_STOPPED
 } dataproc_stat_t;
 
 typedef enum DataProcCMD
 {
-    DATA,
-    CLOSE
+    DATAPROC_DATA,
+    DATAPROC_STOP
 } dataproc_cmd_t;
 
 typedef struct DataProcMSG
@@ -47,7 +46,6 @@ typedef struct DataProc
     dataproc_stat_t status;
 } dataproc_t;
 
-dataproc_t* dataprocInit(uint16_t buffer_size, )
 
 dataproc_msg_t* dataprocMsgCreate(char* data, size_t data_len)
 {
@@ -69,56 +67,41 @@ int dataprocSendData(dataproc_t* data_processor, char* data, size_t data_len, in
     return fifoPush(data_processor->buffer, (void*)dataprocMsgCreate(data, data_len), priority, blocking);
 }
 
-/**Construct data string for logging and TCP transmission. out_str will point to a 
- * newly allocated string. The string length (including NULL terminator) is returned
- */
-int buildDataStr(char* out_str, double timestamp, double distance, double ToF, bool add_break)
-{
-    if (out_str == NULL) return 0;
-    else
-    {
-        int out_str_size = 0;
-        char time_str[20];
-        char dist_str[20];
-        char tof_str[20];
-
-        out_str_size += sprintf(time_str,"%.6f%c", timestamp, DATA_SEPARATOR);
-        out_str_size += sprintf(dist_str, "%.6f%c,", distance, DATA_SEPARATOR);
-        out_str_size += sprintf(tof_str, "%.6f%c\n", ToF, DATA_SEPARATOR);
-
-        out_str = (char*) calloc(sizeof(char)*(out_str_size + 2 /* +2 for additional \n and \0 */));
-        strcat(out_str, time_str);
-        strcat(out_str, dist_str);
-        strcat(out_str, tof_str);
-
-        // add additional new line if requested
-        if (add_break)
-        {
-            strcat(out_str, "\n");
-            out_str_size++;
-        }
-
-        return out_str_size;
-    }
-}
-
 void* dataprocMain(void* arg_dataproc)
 {
+    pthread_t logger_tid;
+    pthread_t tcph_tid;
+    bool valid_tcp = false;
+    bool valid_logger = false;
+
     dataproc_t* data_processor = (dataproc_t*) arg_dataproc;
     logger_t* logger = data_processor->logger;
     tcp_handler_t* tcp = data_processor->tcp_handler;
 
+    if (logger != NULL)
+    {
+        valid_logger = true;
+        pthread_create(&logger_tid, NULL, &loggerMain, logger);
+    }
+    
+    if (tcp != NULL)
+    {
+        valid_tcp = true;
+        pthread_create(&tcph_tid, NULL, &tcpHandlerMain, tcp);
+    }
+    
+
     while (1)
     {
         // Obtain command from buffer
-        data_processor->status = IDLE;
+        data_processor->status = DATAPROC_IDLE;
         dataproc_msg_t* recv_msg = (dataproc_msg_t*) fifoPull(data_processor->buffer, true);
 
         // do work
-        data_processor->status = WORKING;
+        data_processor->status = DATAPROC_WORKING;
         if (recv_msg != NULL)
         {
-            if (recv_msg->CMD == CLOSE) break; // exit if received NULL data pointer
+            if (recv_msg->CMD == DATAPROC_STOP) break; // exit if received NULL data pointer
             else
             {
                 double ToF;
@@ -134,7 +117,7 @@ void* dataprocMain(void* arg_dataproc)
                     // if parity check failed, clear valid flag and terminate data conversion 
                     if (checkOddParity(conv)) 
                     {
-                        valid_data_flag;
+                        valid_data_flag = false;
                         break;
                     }
 
@@ -152,17 +135,16 @@ void* dataprocMain(void* arg_dataproc)
                     distance = -1;
                 }
 
-                struct timeval ts;
-                gettimeofday(&ts, NULL); // faster than clock_gettime but usec resolution instead of nanosec
-
-                double timestamp = tv.tv_sec + tv.tv_usec * 1E-6;
+                double timestamp = getEpochTime();
 
                 char* data_str;
                 int data_str_size = buildDataStr(data_str, timestamp, distance, ToF, recv_msg->add_break);
 
-                loggerSendLogMsg(logger, data_str, data_str_size, "./values.txt",0,true);
+                if (valid_logger)
+                    loggerSendLogMsg(logger, data_str, data_str_size, "./values.txt",0,true);
 
-                if (tcp->tcp_state == CONNECTED) tcpHandlerWrite(tcp, data_str, data_str_size, 0, true);
+                if (valid_tcp && tcp->tcp_state == TCPH_STATE_CONNECTED) 
+                    tcpHandlerWrite(tcp, data_str, data_str_size, 0, true);
             } 
 
             dataprocMsgDestroy(recv_msg);
@@ -173,12 +155,14 @@ void* dataprocMain(void* arg_dataproc)
         }
     }
     
-    data_processor->status = CLOSED;
+    loggerSendCloseMsg(logger, 0, true);
+    tcpHandlerClose(tcp, 0, true);
 
-    return;
-
-
-
+    pthread_join(logger_tid, NULL);
+    pthread_join(tcph_tid, NULL);
     
+    data_processor->status = DATAPROC_STOPPED;
+
+    return;    
 
 }

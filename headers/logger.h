@@ -1,3 +1,6 @@
+#ifndef _LOGGER_H_
+#define _LOGGER_H_
+
 #include <pthread.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -57,3 +60,4 @@ void loggerMsgDestroy(logger_msg_t* msg);
 int logStatus(logger_t* logger, char* msg); //logs msg to Loggers status log file
 int loggerSendLogMsg(logger_t* logger, char* data_str, size_t data_str_size, char* path, int priority, bool blocking);
 int loggerSendCloseMsg(logger_t* logger, int priority, bool blocking);
+#endif

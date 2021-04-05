@@ -26,17 +26,20 @@ void tcpMsgDestroy(tcp_msg_t* tcp_msg)
 
 int tcpConfigKeepalive(int socket, int idle_time_sec, int num_probes, int probe_intvl_sec)
 {
+    int status = 0;
     uint8_t val = 1;
-    setsockopt(socket, SOL_SOCKET, SO_KEEPALIVE,&val, sizeof(val));
+    status += setsockopt(socket, SOL_SOCKET, SO_KEEPALIVE,&val, sizeof(val));
     
     //set idle time in seconds before sending keepalive packets
-    setsockopt(socket, SOL_TCP, TCP_KEEPIDLE, &idle_time_sec, sizeof(idle_time_sec));
+    status += setsockopt(socket, SOL_TCP, TCP_KEEPIDLE, &idle_time_sec, sizeof(idle_time_sec));
     
     //Set # of keepalive packets to send before declaring connection dead
-    setsockopt(socket, SOL_TCP, TCP_KEEPCNT, &num_probes, sizeof(num_probes));
+    status += setsockopt(socket, SOL_TCP, TCP_KEEPCNT, &num_probes, sizeof(num_probes));
 
     //Set time interval in seconds between keepalive packets
-    setsockopt(socket, SOL_TCP, TCP_KEEPCNT, &probe_intvl_sec, sizeof(probe_intvl_sec));
+    status += setsockopt(socket, SOL_TCP, TCP_KEEPCNT, &probe_intvl_sec, sizeof(probe_intvl_sec));
+
+    return status;
 }
 
 tcp_handler_t* tcpHandlerInit(struct sockaddr_in server_address, int max_buffer_size)
@@ -46,7 +49,7 @@ tcp_handler_t* tcpHandlerInit(struct sockaddr_in server_address, int max_buffer_
 
     tcp_handler_t* tcp_handler = (tcp_handler_t*) malloc(sizeof(struct sockaddr_in) + sizeof(tcp_state_t) + sizeof(fifo_buffer_t*));
     tcp_handler->server_address = server_address;
-    tcp_handler->tcp_state = UNCONNECTED;
+    tcp_handler->tcp_state = TCPH_STATE_UNCONNECTED;
     tcp_handler->write_buffer = fifoBufferInit(max_buffer_size);
     tcp_handler->client_socket = -1;
     
@@ -68,7 +71,7 @@ int tcpHandlerWrite(tcp_handler_t* tcp_handler, void* data, size_t data_len, int
 
 int tcpHandlerClose(tcp_handler_t* tcp_handler, int priority, bool blocking)
 {
-    void* msg = (void*)tcpMsgCreate(TCPH_CLOSE, NULL, 0);
+    void* msg = (void*)tcpMsgCreate(TCPH_STOP, NULL, 0);
     return fifoPush(tcp_handler->write_buffer, msg, priority, blocking);
 } //end tcpHandlerWrite()
 
@@ -109,11 +112,12 @@ void* tcpHandlerMain(void* tcpHandler_void)
     printf("tcp_handler: listneing\n");
 
     tcp_msg_t* recv_msg;
-    while (1) 
+    bool loop_stop = false;
+    while (!loop_stop) 
     {
         switch (tcp_handler->tcp_state)
         {
-            case UNCONNECTED:;
+            case TCPH_STATE_UNCONNECTED:;
                 /**This case performs non-blocking calls to accept, waiting for an incoming connection.
                  * accept() returns -1 with errno set to either EAGAIN or EWOULDBLOCK if there are no 
                  * connections pending. If accept() returns something non-zero, continue to socket configuration
@@ -128,7 +132,7 @@ void* tcpHandlerMain(void* tcpHandler_void)
                 {   
                     /* A true error occured here; exit */
                     perror("accept() failed");
-                    tcp_handler->tcp_state = ERROR;
+                    tcp_handler->tcp_state = TCPH_STATE_ERROR;
                     return NULL;
                 }
                 else if (client_socket >= 0) 
@@ -143,7 +147,7 @@ void* tcpHandlerMain(void* tcpHandler_void)
 
                     //state transition
                     tcp_handler->tcp_state = TCPH_STATE_CONNECTED;
-                    break; //end case UNCONNECTED
+                    break; //end case TCPH_STATE_UNCONNECTED
                 }
 
                 /* This point is reached if no pending connections and no error from accept() */
@@ -155,7 +159,7 @@ void* tcpHandlerMain(void* tcpHandler_void)
                     if (recv_msg != NULL)
                     {
                         // printf("tcp_handler.c::accept:: recv_msg = %d\n",recv_msg->CMD);
-                        if(recv_msg->CMD == TCPH_CLOSE)
+                        if(recv_msg->CMD == TCPH_STOP)
                         {
                             close(server_socket);
                             return NULL;
@@ -167,10 +171,10 @@ void* tcpHandlerMain(void* tcpHandler_void)
 
             case TCPH_STATE_CONNECTED:
             /**In the connected state, receive and execute commands from the buffer
-             * until the TCPH_CLOSE command is received or an error occurs
+             * until the TCPH_STOP command is received or an error occurs
              * 
              */ 
-                while (tcp_handler->tcp_state == TCPH_STATE_CONNECTED)
+                while (tcp_handler->tcp_state == TCPH_STATE_CONNECTED && !loop_stop)
                 {
                     printf("tcpHandlerMain: waiting for CMD\n");
                     recv_msg = (tcp_msg_t*)fifoPull(tcp_handler->write_buffer,true);
@@ -194,7 +198,7 @@ void* tcpHandlerMain(void* tcpHandler_void)
 
                             /******* printing output ********/
                             printf("tcp_handler::sending ");
-                            for (int i = 0; i < out_msgsize; i++)
+                            for (size_t i = 0; i < out_msgsize; i++)
                             {
                                 printf("%02X", *((uint8_t*)out_msg+i));
                             }
@@ -219,37 +223,50 @@ void* tcpHandlerMain(void* tcpHandler_void)
                                     case EPIPE: //EPIPE returned if client disconnected
                                         printf("sending on dead socket. Breaking from loop.\n");
                                         tcpHandlerDisconnect(tcp_handler,-1,true);
-                                        tcp_handler->tcp_state = UNCONNECTED;
+                                        tcp_handler->tcp_state = TCPH_STATE_UNCONNECTED;
                                         break;
                                     default: //exit for all unhandled errors
                                         perror("Error in send(): ");
-                                        tcp_handler->tcp_state = ERROR;
-                                        return NULL;
+                                        tcp_handler->tcp_state = TCPH_STATE_ERROR;
+                                        loop_stop = true;
+                                        break;
                                 }
                             }
                             break;
+                        case TCPH_STOP:
+                            /** TCPH_STOP command is identical to TCPH_DISCONNECT
+                             * with the addition of setting the stop flag for the main loop.
+                             * Hence the fall-through.
+                             */
+                            printf("tcp_handler: TCPH_STOP executing\n");
+                            loop_stop = true;
                         case TCPH_DISCONNECT:
+                            /**Close the current client connection and 
+                             * enter the TCPH_STATE_UNCONNECTED state
+                             */
                             close(client_socket);
                             tcp_handler->client_socket = -1;
                             printf("tcp_handler: TCPH_DISCONNECT executed\n");
-                            tcp_handler->tcp_state = UNCONNECTED;
+                            tcp_handler->tcp_state = TCPH_STATE_UNCONNECTED;
                             break;
-                        case TCPH_CLOSE:
-                            printf("tcp_handler: TCPH_CLOSE executing\n");
-                            close(client_socket);
-                            tcp_handler->client_socket = -1;
-                            printf("tcp_handler: closed client\n");
-                            close(server_socket);
-                            printf("tcp_handler: closed server\n");
-                            return NULL;
                         default:
                             break;
                     } //end switch(recv_msg->CMD) in TCPH_STATE_CONNECTED case
                     
-                    tcpMsgDestroy(recv_msg);
+                    tcpMsgDestroy(recv_msg); // free memory allocated for Consumer message
 
                 } //end while (tcp_handler->tcp_state == TCPH_STATE_CONNECTED)
-                break; // end case CONNECTEDs
+                break; // end case TCPH_STATE_CONNECTED
+            default:
+                break;
         } //end switch(tcp_state)
+
+        close(server_socket);
+        printf("tcp_handler: closed server\n");
+
+        // preserve error state on exit
+        if (tcp_handler->tcp_state != TCPH_STATE_ERROR) tcp_handler->tcp_state = TCPH_STATE_STOPPED;
+
+        return NULL;
     } //end while (1) [main loop]
 } //end tcpHandlerMain()

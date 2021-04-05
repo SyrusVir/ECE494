@@ -226,8 +226,7 @@ int main ()
         .enable_pin = TDC_ENABLE_PIN,
         .int_pin = TDC_INT_PIN,
         .clk_pin = TDC_CLK_PIN,
-        .clk_freq = TDC_CLK_FREQ,
-        .timeout_us = TDC_TIMEOUT_USEC
+        .clk_freq = TDC_CLK_FREQ
     };
     tdcInit(&tdc, TDC_BAUD);
 
@@ -324,7 +323,7 @@ int main ()
 
         //Poll TDC INT pin to signal available data
         uint32_t curr_tick = gpioTick();
-        while (gpioRead(tdc.int_pin) && (gpioTick() - curr_tick)  < tdc.timeout_us);
+        while (gpioRead(tdc.int_pin) && (gpioTick() - curr_tick)  < TDC_TIMEOUT_USEC);
 
         if (!gpioRead(tdc.int_pin)) //if TDC returned in time
         {
