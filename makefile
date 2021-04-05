@@ -4,6 +4,13 @@ SRCDIR = $(CURDIR)/src
 INCDIR = $(CURDIR)/headers
 OBJDIR = $(CURDIR)/obj
 LIBFLAGS = -lpigpio -pthread
+OBJS = fifo.o tcp_handler.o logger.o data_processor.o tdc.o
+
+.PHONY: all
+all: $(OBJS)
+
+tdc_test.out: $(OBJS)
+	$(CC) $(CFLAGS) tdc_test.c -o $@ $(addprefix $(OBJDIR)/,$(OBJS)) -I$(INCDIR) -I. $(LIBFLAGS)
 
 fifo.o:
 	$(CC) $(CFLAGS) -c $(SRCDIR)/fifo.c -o $(OBJDIR)/$@ -I$(INCDIR) -pthread
