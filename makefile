@@ -4,7 +4,7 @@ SRCDIR = $(CURDIR)/src
 INCDIR = $(CURDIR)/headers
 OBJDIR = $(CURDIR)/obj
 LIBFLAGS = -lpigpio -pthread
-OBJS = fifo.o tcp_handler.o logger.o data_processor.o tdc.o
+OBJS = fifo.o tcp_handler.o logger.o data_processor.o tdc_util.o
 
 .PHONY: all
 all: $(OBJS)
@@ -28,8 +28,8 @@ logger.o: fifo.o
 data_processor.o: logger.o
 	$(CC) $(CFLAGS) -c $(SRCDIR)/data_processor.c -o $(OBJDIR)/$@ -I$(INCDIR) -I. -pthread
 
-tdc.o: logger.o
-	$(CC) $(CFLAGS) -c tdc.c -o $(OBJDIR)/$@ -I$(INCDIR) -I. $(LIBFLAGS)
+tdc_util.o: tdc_util.c logger.o
+	$(CC) $(CFLAGS) -c tdc_util.c -o $(OBJDIR)/$@ -I$(INCDIR) -I. $(LIBFLAGS)
  
  .PHONY: clean
  clean:

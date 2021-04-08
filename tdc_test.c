@@ -1,10 +1,8 @@
 
-#include "tdc.h"
+#include "tdc_util.h"
 #include "logger.h"
 
-
 #define AUTOINC_METHOD
-#define PIGPIO
 // #define DEBUG
 
 
@@ -195,7 +193,7 @@ int main ()
              * reading 9 bytes to obtain the 3-byte long TIME1, CLOCK_COUNT1, 
              * and TIME2 registers.
              */
-            char tx_buff1[10] = {0x90}; // start an auto incrementing read to read TIME1, CLOCK_COUNT1, TIME2 in a single command
+            const char tx_buff1[10] = {0x90}; // start an auto incrementing read to read TIME1, CLOCK_COUNT1, TIME2 in a single command
             printf("Transaction 1 spiXfer=%d\n",spiTransact(tdc.spi_handle, tx_buff1, rx_buff, sizeof(tx_buff1)));
             
             //print returned data

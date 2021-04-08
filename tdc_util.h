@@ -1,16 +1,13 @@
+#ifndef _TDC_UTIL_H_
+#define _TDC_UTIL_H_
 #include <pigpio.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <sys/mman.h>
-#include <sys/time.h>
-#include <sys/ioctl.h>
-#include <sched.h>
 #include <time.h>
-#include <fcntl.h>
 #include <unistd.h>
-#include <linux/spi/spidev.h>
 
 #include "data_processor.h"
 
@@ -93,6 +90,8 @@ typedef struct TDC {
     uint8_t int_pin;    // Pin at which to read the TDC interrupt pin; active LO until next measurement
 } tdc_t;
 
+void printArray(char* arr, int arr_size);
+
 // Returns true if n has odd parity
 bool checkOddParity(uint32_t n);
 
@@ -101,12 +100,6 @@ double calcToF(uint32_t* tdc_data, uint32_t cal_periods, uint32_t clk_freq);
 
 // Calculate distance in meters
 double calcDist(double ToF);
-
-/**This function encapsulates the routines for an SPI transaction
- * using either pigio or spidev routines depending on if the macro
- *  PIGPIO is defined.
- */
-int spiTransact(int fd, char* tx_buf, char* rx_buf, int count);
 
 /**Convert the bytes at start to start + (len-1) into a 32-bit number.
  * If big_endian = true, the byte *start is considered the MSB.
@@ -120,14 +113,8 @@ uint32_t convertSubsetToLong(char* start, int len, bool big_endian);
  */
 int tdcInit(tdc_t* tdc, int baud);
 
-/**Sends the necessary commands to start a TDC measurement; See tdc.c for
- * exact measurement configuration
- */ 
-int tdcStartMeas(tdc_t* tdc);
-
-// Retrieve the current seconds from the epoch with microsecond resolution
-double getEpochTime();
-
-/**Build a data string for logging/transmission to GUI.
+/**Closes SPI handle, stops reference clock, and disables TDC
  */
-int buildDataStr(char* out_str, double timestamp, double distance, double ToF, bool add_break);
+void tdcClose(tdc_t* tdc);
+
+#endif
