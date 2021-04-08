@@ -1,5 +1,6 @@
 
 #include "tdc.h"
+#include "logger.h"
 
 
 #define AUTOINC_METHOD
@@ -17,7 +18,7 @@
 #define TDC_START_PIN 23         // physical pin 16; provides TDC start signal for debugging 
 #define TDC_STOP_PIN 18         // physical pin 12; provides TDC stop signal for debugging 
 #define TDC_TIMEOUT_USEC (uint32_t)5E6
-#define TDC_CLK_FREQ (uint32_t)19.2E6/1
+#define TDC_CLK_FREQ (uint32_t)19.2E6/2
 
 //Laser pin defintions
 #define LASER_ENABLE_PIN 26     // physical pin 37; must be TTL HI to allow emission
@@ -26,184 +27,7 @@
 #define LASER_PULSE_COUNT 2
 #define LASER_PULSE_FREQ 10e3
 #define LASER_PULSE_PERIOD 1/(LASER_PULSE_FREQ) * 1E6
-
-void printArray(char* arr, int arr_size)
-{
-    for (int i = 0; i < arr_size; i++)
-    {
-        printf("%X ", arr[i]);
-    }
-    printf("\n");
-} // end printArray()
-
-//Returns true if n has odd parity
-bool checkOddParity(uint32_t n)
-{
-    /**Calculate parity by repeatedly dividing the bits of n into halves
-     * and XORing them together. 1 = Odd parity
-     * 
-     * 8-bit example:
-     * n = b7 b6 b5 b4 b3 b2 b1 b0
-     * n ^= (n >> 4) --> n = b7 b6 b5 b4 (b7^b3) (b6^b2) (b5^b1) (b4^b0)
-     * n ^= (n >> 2) --> n = b7 b6 b5 b4 (b7^b3) (b6^b2) (b7^b5^b3^b1) (b6^b4^b2^b0)
-     * n ^= (n >> 1) --> n = b7 b6 b5 b4 (b7^b3) (b6^b2) (b7^b5^b3^b1) (b7^b6^b5^b4^b3^b2^b1^b0)
-     * return n & 1 = return (b7^b6^b5^b4^b3^b2^b1^b0)
-     */        
-    for (uint8_t i = (sizeof(n)*8 >> 1); i > 0; i >>= 1)
-    {
-        n ^= (n >> i);
-    }
-
-    return n & 1;
-} // end checkOddParity
-
-/**Assumes tdc_data to be a 5-element array of uint32_t of the following form:
- * [TIME1],[CLOCK_COUNT1],[TIME2],[CALIBRATION1],[CALIBRATION2] 
- */
-double calcToF(uint32_t* tdc_data, uint32_t cal_periods, uint32_t clk_freq)
-{
-    double ToF;
-    double time1 = tdc_data[0];
-    uint32_t clock_count1 = tdc_data[1];
-    uint32_t time2 = tdc_data[2];
-    uint32_t calibration1 = tdc_data[3];
-    double calibration2 = tdc_data[4];
-
-    printf("time1=%u\n", time1);
-    printf("clock_count1=%u\n", clock_count1);
-    printf("time2=%u\n", time2);
-    printf("calibration1=%u\n", calibration1);
-    printf("calibration2=%u\n", calibration2);
-
-    double calCount = (calibration2 - calibration1) / (double)(cal_periods - 1);
-    if (!calCount)
-        return 0; // catch divide-by-zero error
-    else
-    {
-        ToF = ((time1 - time2) / calCount + clock_count1) / clk_freq;
-        printf("ToF = %f usec\n", ToF*1E-6);
-        return ToF;
-    }
-}
-
-double calcDist(double ToF)
-{
-    return ToF/LIGHT_SPEED/2;
-}
-
-int spiTransact(int fd, char* tx_buf, char* rx_buf, int count)
-{   
-    /**Funciton that encapsulates an SPI transfer function
-     * using either pigpio or spidev routines depending on 
-     * defined macros
-     */
-    int bytes = 0;
-    #ifdef PIGPIO
-    bytes = spiXfer(fd, tx_buf, rx_buf, count);
-    #else
-    struct spi_ioc_transfer tr = {
-        .tx_buf = (unsigned long) tx_buf,
-        .rx_buf = (unsigned long) rx_buf,
-        .len = count,
-        .delay_usecs = 0,
-        .speed_hz = TDC_BAUD,
-        .bits_per_word = 8
-    };
-
-    bytes = (ioctl(fd, SPI_IOC_MESSAGE(1), &tr) ? -1 : count);
-    #endif
-
-    return bytes;
-} // end spiTransact
-
-//convert a subset of a byte array into a 32-bit number
-uint32_t convertSubsetToLong(char* start, int len, bool big_endian)
-{
-    /**Parameters:  char* start - pointer to first element in byte array subset
-     *              int len - number of elements, max 4, in the subset
-     *              bool big_endian - if true, the first element of start is considerd the MSB
-     * Returns:     uint32_t out - the final result of conversion
-     */
-
-    len = (len > 4 ? 4 : len); //if len > 4, assign 4. OTW assign user-provided length
-    uint32_t out = 0;
-    for (int i = 0; i < len; i++)
-    {
-        // shift the bytes pointed to by start and OR to get output
-        out |= (start[(big_endian ? len - 1 - i : i)] << 8*i);
-    }
-
-    return out; 
-} // end convertSubsetToLong
-
-int tdcInit(tdc_t* tdc, int baud)
-{
-    #ifndef PIGPIO
-    /******** spidev init ********/
-    tdc->spi_handle = open("/dev/spidev0.0", O_RDWR);
-    /*****************************/
-    #else
-    int status = gpioInitialise();
-    if (status < 0) return status;
-    /******** Pigpio SPI init ********/
-    tdc->spi_handle = spiOpen(0, TDC_BAUD, 0
-            /* 0b00 |          // Positive (MSb 0) clock edge centered (LSb 0) on data bit
-            (0b000 << 2) |  // all 3 CE pins are active low
-            (0b000 << 5) |  // all 3 CE pins reserved for SPI
-            (0 << 8) |      // 0 = Main SPI; 1 = Aux SPI 
-            (0 << 9) |      // If 1, 3-wire mode
-            ((0 & 0xF) << 10) | // bytes to write before switching to read (N/A if not in 3-wire mode)
-            (0 << 14) |         // If 1, tx LSb first (Aux SPI only)
-            (0 << 15) |         // If 1, recv LSb first (Aux SPI only)
-            ((8 & 0x3F) << 16)  // bits per word; 0 defaults to 8 */
-
-    );
-    /******************************/
-    #endif
-
-    gpioHardwareClock(tdc->clk_pin,tdc->clk_freq);// start TDC reference clock
-    gpioSetMode(tdc->enable_pin, PI_OUTPUT);     // active HI
-    gpioSetMode(tdc->int_pin, PI_INPUT);         // active LOW 
-    return tdc->spi_handle;
-} // end tdcInit()
-
-/**Start Measurement TDC with the following settings
- * - No calibration at measurement completion
- * - Even parity enabled
- * - Rising edge polarity for TRIGG, START, and STOP
- * - Measurement mode 1
- */
-int tdcStartMeas(tdc_t* tdc)
-{
-    char tx_buff[2] = {
-        TDC_CMD(0, 1, TDC_CONFIG1), 
-        TDC_CONFIG1_BITS(0,1,0,0,0,0,1)
-        };
-
-    return spiTransact(tdc->spi_handle, tx_buff, NULL, sizeof(tx_buff));
-}
-
-double getEpochTime()
-{
-    static struct timeval tv;
-    gettimeofday(&tv, NULL);
-
-    return tv.tv_sec + tv.tv_usec *1E-6; 
-}
-
-/**Construct data string for logging and TCP transmission. The returned string
- * must be freed later
- */
-int buildDataStr(char* out_str, double timestamp, double distance, double ToF, bool add_break)
-{
-    return sprintf(out_str, "%2$.6lf%1$c%3$.6lE%1$c%4$.6lE%5$s\n", 
-            DATA_SEPARATOR,
-            timestamp,
-            distance,
-            ToF,
-            (add_break ? "\n" : "")
-            );
-}
+#define LASER_PULSE_POL 1       // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI 
 
 int main () 
 {
@@ -246,8 +70,8 @@ int main ()
     gpioSetMode(LASER_ENABLE_PIN, PI_OUTPUT);
     gpioSetMode(LASER_PULSE_PIN, PI_OUTPUT);
     gpioSetMode(LASER_SHUTTER_PIN, PI_OUTPUT);
-    gpioWrite(LASER_SHUTTER_PIN,0); // initialise to low
-    gpioWrite(LASER_ENABLE_PIN,0); // initialise to low
+    gpioWrite(LASER_SHUTTER_PIN, !LASER_PULSE_POL); // initialise to low
+    gpioWrite(LASER_ENABLE_PIN, !LASER_PULSE_POL); // initialise to low
     
     //Non-incrementing write to CONFIG2 reg (address 0x01)
     //Clear CONFIG2 to configure 2 calibration clock periods,
@@ -311,9 +135,9 @@ int main ()
             // send train of laser pulses
             for (int i = 0; i < LASER_PULSE_COUNT; i++)
             {
-                gpioWrite(LASER_PULSE_PIN,1);
+                gpioWrite(LASER_PULSE_PIN,LASER_PULSE_POL);
                 gpioDelay(LASER_PULSE_PERIOD/2);
-                gpioWrite(LASER_PULSE_PIN,0);
+                gpioWrite(LASER_PULSE_PIN,!LASER_PULSE_POL);
                 gpioDelay(LASER_PULSE_PERIOD/2);
             }
             #endif
@@ -440,7 +264,8 @@ int main ()
             }
             #endif
 
-            printf("valid=%d", valid_data_flag);
+            valid_data_flag = true;
+            printf("valid=%d\n", valid_data_flag);
             
             if (valid_data_flag) 
             {
@@ -458,6 +283,8 @@ int main ()
 
             char data_str[70];
             int data_str_len = buildDataStr(data_str, time, dist, ToF, true);
+
+            printf("logger state = %d\n", logger->status);
             loggerSendLogMsg(logger, data_str, data_str_len, "./tof_vals.txt", 0, true);            
         } // end if (!gpioRead(tdc.int_pin)), i.e. no timeout waiting for TDC
         else //else timeout occured

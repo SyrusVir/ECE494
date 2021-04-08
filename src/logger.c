@@ -27,34 +27,35 @@ void* loggerMain(void* arg_logger)
         
         switch (rec_msg->cmd)
         {
-        case LOGGER_LOG:;  //semicolon allows variable declaration following case label
-            FILE* f = fopen(rec_msg->path, "a");
-            if (f == NULL) 
-            {
-                char msg[] = "loggerMain: Error opening provided path"; 
-                printf("%s\n",msg);
-                logStatus(logger, msg); 
-            }
-            else 
-            {
-                printf("Writing \"%s\"\n", rec_msg->data);
-                if (fprintf(f,"%s",rec_msg->data) < 0) 
+            case LOGGER_LOG:;  //semicolon allows variable declaration following case label
+                FILE* f = fopen(rec_msg->path, "a");
+                if (f == NULL) 
                 {
-                    char msg[] = "loggerMain: Error writing to provided path";
-                    printf("%s\n", msg);
-                    logStatus(logger,msg);
+                    char msg[] = "loggerMain: Error opening provided path"; 
+                    printf("%s\n",msg);
+                    logStatus(logger, msg); 
                 }
-            }
-            fclose(f);
-            break;
-        case LOGGER_STOP:;
-            loop_stop = true;
-            break;
-        default:
-            break;
+                else 
+                {
+                    printf("Writing \"%s\"\n", rec_msg->data);
+                    if (fprintf(f,"%s",rec_msg->data) < 0) 
+                    {
+                        char msg[] = "loggerMain: Error writing to provided path";
+                        printf("%s\n", msg);
+                        logStatus(logger,msg);
+                    }
+                }
+                fclose(f);
+                break;
+            case LOGGER_STOP:;
+                loop_stop = true;
+                break;
+            default:
+                break;
+            
+        } // end switch(rec_ms->cmd)
         
         loggerMsgDestroy(rec_msg); //destroy message after processing
-        } // end switch(rec_ms->cmd)
 
         /** NOTE: I believe it is not the responsiblity of the Consumer to destroy itself.
          * Stopping a consumer here is "freezing" its state. The consumer can be restarted 
@@ -62,9 +63,10 @@ void* loggerMain(void* arg_logger)
          * Producer(s) to deallocate memory for the Consumer when all Producers agree that it is 
          * no longer needed 
          */
-        logger->status = LOGGER_STOPPED;
-        return;
     } // end while(!loop_stop)
+    
+    logger->status = LOGGER_STOPPED;
+    return;
 } // end loggerMain
 
 //Constructors

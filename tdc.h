@@ -12,7 +12,6 @@
 #include <unistd.h>
 #include <linux/spi/spidev.h>
 
-#include "logger.h"
 #include "data_processor.h"
 
 #define LIGHT_SPEED 299792458.0
