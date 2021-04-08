@@ -1,151 +1,107 @@
-#include <stdlib.h>
-#include <stdbool.h>
-#include <string.h>
-#include <time.h>
-#include "fifo.h"
-#include "logger.h"
-#include "tcp_handler.h"
-#include "tdc.h"
+#include "data_processor.h"
 
-
-typedef enum DataProcStatus
+/**Function: dataprocCreate
+ * 
+ * Parameters: int buffer_size - capacity of the FIFO buffer 
+ * 
+ * Returns: dataproc_t* out - pointer to allocated memory holding
+ *                                  the data proc structure ready for use
+ * 
+ * Description: Allocates memory for the data processor structure and initializes
+ *              a fifo buffer on which to place commands
+ */
+dataproc_t* dataprocCreate(int buffer_size)
 {
-    DATAPROC_UNINIT,
-    DATAPROC_IDLE,
-    DATAPROC_WORKING,
-    DATAPROC_STOPPED
-} dataproc_stat_t;
+    dataproc_t* out = (dataproc_t*) malloc(sizeof(dataproc_t));
+    out->buffer = fifoBufferInit(buffer_size);
+    return out;
+}
 
-typedef enum DataProcCMD
+/**Function: dataprocDestroy
+ * 
+ * Parameters: dataproc_t* data_proc - pointer to a data processor structure initialized via
+ *                                     dataprocCreate()
+ * 
+ * Returns dataproc_msg_t** - returns a NULL terminated array of pointers to data_msg_t structs still in buffer
+ */
+dataproc_msg_t** dataprocDestroy(dataproc_t* data_proc)
 {
-    DATAPROC_DATA,
-    DATAPROC_STOP
-} dataproc_cmd_t;
+    fifo_buffer_t* buffer = data_proc->buffer;
+    free(data_proc);
+    return (dataproc_msg_t**) fifoBufferClose(buffer);
+} // end dataprocDestroy
 
-typedef struct DataProcMSG
-{
-    struct timespec ts;         // timestamp of measurement
-    
-    uint8_t* tdc_data_idx;      // array of indices pointing to first byte of each TDC data quantity (e.g. TIME1)
-    char* tdc_raw_data;         // bytes of raw TDC data
-    size_t tdc_raw_data_len;    // bytes contained in string holding raw TDC data
-    size_t tdc_num_idx;         // number of indices in tdc_data_idx
-    uint32_t clk_freq;          // TDC reference clock frequency
-    uint8_t cal_periods;        // TDC calibration periods
-    
-    dataproc_cmd_t CMD;         // specified command
-    
-    bool add_break;             // add extra line break to signify SOS detection
-} dataproc_msg_t;
-
-typedef struct DataProc
-{
-    logger_t* logger;
-    tcp_handler_t* tcp_handler;
-    fifo_buffer_t* buffer;
-    dataproc_stat_t status;
-} dataproc_t;
-
-
-dataproc_msg_t* dataprocMsgCreate(char* data, size_t data_len)
+/**Function: dataProcMsgCreate
+ * 
+ * Parameters: dataproc_cmd_t CMD - desired supported command for data processor
+ *             void* (*p_func)(void*) - a pointer to a function that takes a single void* parameter and returns a void*
+ *             void* p_args - pointer to arguments to pass to p_func
+ *             size_t arg_ size - size in bytes of the argument to p_func
+ * 
+ * Return: dataproc_msg_t* out_msg - pointer to allocated message ready to send to a data processing Consumer
+ * 
+ * Description: Memory space is allocated to duplicate the provided function arguments and for the output message 
+ *              structure
+ */
+dataproc_msg_t* dataprocMsgCreate(dataproc_cmd_t CMD, void* (*p_func)(void*), void* p_args, size_t arg_size)
 {
     dataproc_msg_t* out_msg = (dataproc_msg_t*) malloc(sizeof(dataproc_msg_t));
-    out_msg->tdc_raw_data = strndup(data, data_len);
-    out_msg->tdc_raw_data_len = data_len;
+    out_msg->p_args = malloc(arg_size);
+
+    out_msg->CMD = CMD;
+    out_msg->p_func = p_func;
+    
+    if (p_args == NULL) out_msg->p_args = NULL;
+    else memcpy(out_msg->p_args, p_args, arg_size);
 
     return out_msg;
 }
 
+/**Function dataprocMsgDestroy
+ * Parameters - dataproc_msg_t* msg - pointer to message struct to deallocate
+ * Returns: None
+ * 
+ * Description: frees the allocated pointer to function arguments as well as allocated
+ *              pointer to the message struct
+ */
 void dataprocMsgDestroy(dataproc_msg_t* msg)
 {
-    free(msg->tdc_raw_data);
+    free(msg->p_args);
     free(msg);
 }
 
-int dataprocSendData(dataproc_t* data_processor, char* data, size_t data_len, int priority, bool blocking)
+int dataprocSendData(dataproc_t* data_processor, void* (*p_func)(void*), void* p_args, size_t arg_size, int priority, bool blocking)
 {
-    return fifoPush(data_processor->buffer, (void*)dataprocMsgCreate(data, data_len), priority, blocking);
+    return fifoPush(data_processor->buffer, (void*)dataprocMsgCreate(DATAPROC_CMD_DATA, p_func, p_args, arg_size), priority, blocking);
+}
+
+int dataprocSendStop(dataproc_t* data_processor, int priority, bool blocking)
+{
+    return fifoPush(data_processor->buffer, (void*)dataprocMsgCreate(DATAPROC_CMD_STOP, NULL, NULL, 0), priority, blocking);
 }
 
 void* dataprocMain(void* arg_dataproc)
 {
-    pthread_t logger_tid;
-    pthread_t tcph_tid;
-    bool valid_tcp = false;
-    bool valid_logger = false;
-
     dataproc_t* data_processor = (dataproc_t*) arg_dataproc;
-    logger_t* logger = data_processor->logger;
-    tcp_handler_t* tcp = data_processor->tcp_handler;
-
-    if (logger != NULL)
-    {
-        valid_logger = true;
-        pthread_create(&logger_tid, NULL, &loggerMain, logger);
-    }
     
-    if (tcp != NULL)
-    {
-        valid_tcp = true;
-        pthread_create(&tcph_tid, NULL, &tcpHandlerMain, tcp);
-    }
-    
+    // if received data processor is NULL, immediately raise stop flag for early exit
+    bool loop_stop = (data_processor == NULL); 
 
-    while (1)
+    while (!loop_stop)
     {
         // Obtain command from buffer
-        data_processor->status = DATAPROC_IDLE;
+        data_processor->status = DATAPROC_STAT_IDLE;
         dataproc_msg_t* recv_msg = (dataproc_msg_t*) fifoPull(data_processor->buffer, true);
 
         // do work
-        data_processor->status = DATAPROC_WORKING;
+        data_processor->status = DATAPROC_STAT_WORKING;
         if (recv_msg != NULL)
         {
-            if (recv_msg->CMD == DATAPROC_STOP) break; // exit if received NULL data pointer
+            if (recv_msg->CMD == DATAPROC_CMD_STOP) break; // exit if received NULL data pointer
             else
             {
-                double ToF;
-                double distance;
-                bool valid_data_flag = true;
-                
-                uint32_t tdc_data[recv_msg->tdc_num_idx];
-                for (uint8_t i = 0; i < recv_msg->tdc_num_idx; i++)
-                {
-                    uint8_t idx = recv_msg->tdc_data_idx[i];
-                    uint32_t conv = convertSubsetToLong(recv_msg->tdc_raw_data+idx, 3, true);
-
-                    // if parity check failed, clear valid flag and terminate data conversion 
-                    if (checkOddParity(conv)) 
-                    {
-                        valid_data_flag = false;
-                        break;
-                    }
-
-                    tdc_data[i] = conv & ~TDC_PARITY_MASK; // clear the parity bit from data
-                }
-
-                if (valid_data_flag)
-                {
-                    ToF = calcToF(tdc_data, 2, recv_msg->clk_freq);
-                    distance = ToF/LIGHT_SPEED/2;
-                }
-                else
-                {
-                    ToF = -1;
-                    distance = -1;
-                }
-
-                double timestamp = getEpochTime();
-
-                char* data_str;
-                int data_str_size = buildDataStr(data_str, timestamp, distance, ToF, recv_msg->add_break);
-
-                if (valid_logger)
-                    loggerSendLogMsg(logger, data_str, data_str_size, "./values.txt",0,true);
-
-                if (valid_tcp && tcp->tcp_state == TCPH_STATE_CONNECTED) 
-                    tcpHandlerWrite(tcp, data_str, data_str_size, 0, true);
-            } 
+                recv_msg->p_func(recv_msg->p_args);
+            }
 
             dataprocMsgDestroy(recv_msg);
         }
@@ -153,16 +109,9 @@ void* dataprocMain(void* arg_dataproc)
         {
             printf("NULL msg received in data processor\n");
         }
-    }
-    
-    loggerSendCloseMsg(logger, 0, true);
-    tcpHandlerClose(tcp, 0, true);
+    } // end while (1), the main loop
+        
+    data_processor->status = DATAPROC_STAT_STOPPED;
 
-    pthread_join(logger_tid, NULL);
-    pthread_join(tcph_tid, NULL);
-    
-    data_processor->status = DATAPROC_STOPPED;
-
-    return;    
-
-}
+    return NULL;    
+} // end dataprocMain()

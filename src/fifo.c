@@ -209,7 +209,7 @@ void** fifoFlush(fifo_buffer_t* buffer, bool blocking)
     if (lock_status == 0) //if mutex obtained
     {
         //allocate output array of nodes. +1 for NULL terminator
-        void** out = (void*) calloc(buffer->buffer_occupancy + 1,sizeof(void*));
+        void** out = (void**) calloc(buffer->buffer_occupancy + 1,sizeof(void*));
 
         //iterate over current FIFO nodes
         fifo_node_t* p_tmp; //temporary pointer

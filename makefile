@@ -5,7 +5,11 @@ INCDIR = $(CURDIR)/headers
 OBJDIR = $(CURDIR)/obj
 LIBFLAGS = -lpigpio -pthread
 
-fifo.o:
+.PHONY: dataproc_test.out
+dataproc_test.out: $(OBJDIR)/fifo.o 
+	$(CC) $(CFLAGS) dataproc_test.c $< -o $@ $(LIBFLAGS) -I. -I$(INCDIR)
+
+%/fifo.o:
 	$(CC) $(CFLAGS) -c $(SRCDIR)/fifo.c -o $(OBJDIR)/$@ -I$(INCDIR) -pthread
 
 tcp_handler.o: fifo.o
