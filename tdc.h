@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <linux/spi/spidev.h>
+#include <math.h>
 
 #include "data_processor.h"
 
@@ -92,6 +93,8 @@ typedef struct TDC {
     uint8_t enable_pin; // active HIGH
     uint8_t int_pin;    // Pin at which to read the TDC interrupt pin; active LO until next measurement
 } tdc_t;
+
+void printArray(char* arr, int arr_size);
 
 // Returns true if n has odd parity
 bool checkOddParity(uint32_t n);

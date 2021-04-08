@@ -56,31 +56,25 @@ double calcToF(uint32_t* tdc_data, uint32_t cal_periods, uint32_t clk_freq)
 {
     double ToF;
     double time1 = tdc_data[0];
-    uint32_t clock_count1 = tdc_data[1];
-    uint32_t time2 = tdc_data[2];
-    uint32_t calibration1 = tdc_data[3];
+    double clock_count1 = tdc_data[1];
+    double time2 = tdc_data[2];
+    double calibration1 = tdc_data[3];
     double calibration2 = tdc_data[4];
 
-    printf("time1=%u\n", time1);
-    printf("clock_count1=%u\n", clock_count1);
-    printf("time2=%u\n", time2);
-    printf("calibration1=%u\n", calibration1);
-    printf("calibration2=%u\n", calibration2);
 
-    double calCount = (calibration2 - calibration1) / (double)(cal_periods - 1);
-    if (!calCount)
+    double calCount = fabs(calibration2 - calibration1) / (double)(cal_periods - 1);
+    if (calCount == 0)
         return 0; // catch divide-by-zero error
     else
     {
-        ToF = ((time1 - time2) / calCount + clock_count1) / clk_freq;
-        printf("ToF = %f usec\n", ToF*1E-6);
+        ToF = (fabs(time1 - time2) / calCount + clock_count1) / clk_freq;
         return ToF;
     }
 }
 
 double calcDist(double ToF)
 {
-    return ToF/LIGHT_SPEED/2;
+    return ToF*LIGHT_SPEED/2;
 }
 
 int spiTransact(int fd, char* tx_buf, char* rx_buf, int count)

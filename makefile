@@ -3,7 +3,7 @@ CFLAGS=-g -Wall -Wextra
 SRCDIR = $(CURDIR)/src
 INCDIR = $(CURDIR)/headers
 OBJDIR = $(CURDIR)/obj
-LIBFLAGS = -lpigpio -pthread
+LIBFLAGS = -lpigpio -pthread -lm
 OBJS = fifo.o tcp_handler.o logger.o data_processor.o tdc.o
 
 .PHONY: all
