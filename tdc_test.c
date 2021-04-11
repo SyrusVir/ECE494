@@ -1,6 +1,8 @@
 
 #include "tdc_util.h"
 #include "logger.h"
+#include "data_processor.h"
+#include "tcp_handler.h"
 
 #define AUTOINC_METHOD
 // #define DEBUG

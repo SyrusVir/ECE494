@@ -1,4 +1,4 @@
-#include <src/data_processor.c>
+#include "data_processor.h"
 #include <string.h>
 
 void* procFun(void* args)

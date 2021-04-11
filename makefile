@@ -1,32 +1,39 @@
 CC=gcc
-CFLAGS=-g -Wall -Wextra
-SRCDIR = $(CURDIR)/src
-INCDIR = $(CURDIR)/headers
-OBJDIR = $(CURDIR)/obj
+CFLAGS=-g -O -Wall -Wextra
+
+DEPS = $(CURDIR)/Threaded-Logger/liblogger.a\
+$(CURDIR)/Threaded-TCP/libtcphandler.a\
+$(CURDIR)/scanning-mirror/scanmirror.o\
+$(CURDIR)/scanning-mirror/pinpoller.o\
+$(CURDIR)/MLD-019/MLD019.o\
+$(CURDIR)/Data-Processor/libdatproc.a
+
+INC=$(dir $(DEPS)) $(CURDIR)
+INCS = $(addprefix -I ,$(INC))
+CLEANDEPS = $(addsuffix .clean, $(DEPS))
+
 LIBFLAGS = -lpigpio -pthread
-OBJS = fifo.o tcp_handler.o logger.o data_processor.o tdc_util.o
 
-.PHONY: all
-all: $(OBJS)
+.PHONY: clean subclean $(CLEANDEPS) suball $(DEPS) $(SUBOBJ)
 
-tdc_test.out: $(OBJS)
-	$(CC) $(CFLAGS) tdc_test.c -o $@ $(addprefix $(OBJDIR)/,$(OBJS)) -I$(INCDIR) -I. $(LIBFLAGS)
+suball: $(DEPS)
+$(DEPS):
+	$(MAKE) -C $(@D) $(@F)
 
-.PHONY: dataproc_test.out
-dataproc_test.out: $(OBJDIR)/fifo.o 
-	$(CC) $(CFLAGS) dataproc_test.c $< -o $@ $(LIBFLAGS) -I. -I$(INCDIR)
+clean:
+	rm -f *.o *.a && make subclean
 
-%/fifo.o:
-	$(CC) $(CFLAGS) -c $(SRCDIR)/fifo.c -o $(OBJDIR)/$@ -I$(INCDIR) -pthread
+subclean: $(CLEANDEPS)
+	rm -f *.o *.a
+$(CLEANDEPS): %.clean:
+	$(MAKE) -C $(*D) clean
 
-tcp_handler.o: fifo.o
-	$(CC) $(CFLAGS) -c $(SRCDIR)/tcp_handler.c -o $(OBJDIR)/$@ -I$(INCDIR) -pthread
+%.out: $(DEPS) tdc.o
+	
+	$(CC) $(CFLAGS) $(subst .out,.c,$@) $^ -o $@ $(addprefix -I,$(INC)) $(LIBFLAGS)
 
-logger.o: fifo.o
-	$(CC) $(CFLAGS) -c $(SRCDIR)/logger.c -o $(OBJDIR)/$@ -I$(INCDIR) $(LIBFLAGS)
-
-data_processor.o: logger.o
-	$(CC) $(CFLAGS) -c $(SRCDIR)/data_processor.c -o $(OBJDIR)/$@ -I$(INCDIR) -I. -pthread
+tdc.o: tdc.c tdc.h
+	$(CC) $(CFLAGS) -c $< $(INCS)  $(LIBFLAGS)
 
 tdc_util.o: tdc_util.c logger.o
 	$(CC) $(CFLAGS) -c tdc_util.c -o $(OBJDIR)/$@ -I$(INCDIR) -I. $(LIBFLAGS)

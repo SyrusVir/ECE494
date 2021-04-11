@@ -1,0 +1,15 @@
+[submodule "Threaded-Logger"]
+	path = Threaded-Logger
+	url = https://github.com/SyrusVir/Threaded-Logger
+[submodule "Threaded-TCP"]
+	path = Threaded-TCP
+	url = https://github.com/SyrusVir/Threaded-TCP
+[submodule "MLD-019"]
+	path = MLD-019
+	url = https://github.com/SyrusVir/MLD-019
+[submodule "scanning-mirror"]
+	path = scanning-mirror
+	url = https://github.com/SyrusVir/scanning-mirror
+[submodule "Data-Processor"]
+	path = Data-Processor
+	url = https://github.com/SyrusVir/Data-Processor
