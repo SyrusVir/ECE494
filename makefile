@@ -28,16 +28,8 @@ subclean: $(CLEANDEPS)
 $(CLEANDEPS): %.clean:
 	$(MAKE) -C $(*D) clean
 
-%.out: $(DEPS) tdc.o
-	
+tdc_util.o: tdc_util.c tdc_util.h
+	$(CC) $(CFLAGS) -c $< -o $@ -I$(INCDIR) -I. $(LIBFLAGS)
+
+%.out: $(DEPS) tdc_util.o
 	$(CC) $(CFLAGS) $(subst .out,.c,$@) $^ -o $@ $(addprefix -I,$(INC)) $(LIBFLAGS)
-
-tdc.o: tdc.c tdc.h
-	$(CC) $(CFLAGS) -c $< $(INCS)  $(LIBFLAGS)
-
-tdc_util.o: tdc_util.c logger.o
-	$(CC) $(CFLAGS) -c tdc_util.c -o $(OBJDIR)/$@ -I$(INCDIR) -I. $(LIBFLAGS)
- 
- .PHONY: clean
- clean:
-	rm $(OBJDIR)/*.o

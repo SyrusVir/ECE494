@@ -66,13 +66,13 @@ uint32_t convertSubsetToLong(char* start, int len, bool big_endian)
      *              bool big_endian - if true, the first element of start is considerd the MSB
      * Returns:     uint32_t out - the final result of conversion
      */
-
-    len = (len > 4 ? 4 : len); //if len > 4, assign 4. OTW assign user-provided length
+    if (len > 4) len = 4; //if len > 4, assign 4. OTW assign user-provided length
     uint32_t out = 0;
+    int end = len - 1;
     for (int i = 0; i < len; i++)
     {
         // shift the bytes pointed to by start and OR to get output
-        out |= (start[(big_endian ? len - 1 - i : i)] << 8*i);
+        out |= (start[(big_endian ? end - i : i)] << 8*i);
     }
 
     return out; 

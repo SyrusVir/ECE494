@@ -1,12 +1,13 @@
-
+#define _GNU_SOURCE
+#include <time.h>
 #include "tdc_util.h"
 #include "logger.h"
 #include "data_processor.h"
 #include "tcp_handler.h"
 
+
 #define AUTOINC_METHOD
 // #define DEBUG
-
 
 #define TDC_CAL_PERIODS 2
 
@@ -29,6 +30,14 @@
 #define LASER_PULSE_PERIOD 1/(LASER_PULSE_FREQ) * 1E6
 #define LASER_PULSE_POL 1       // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI 
 
+double getEpochTime()
+{
+    static struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    return tv.tv_sec + tv.tv_usec * 1E-6;
+}
+
 int main () 
 {
     /********* Threaded Logger Configuration ********/
@@ -39,6 +48,20 @@ int main ()
     pthread_create(&logger_tid, NULL, &loggerMain, logger); 
     /************************************************/
 
+    /********** TCP Handler Configuration **********/
+    pthread_t tcp_tid;
+    struct sockaddr_in server_addr = {
+        .sin_family = AF_INET, //TCP
+        .sin_port = htons(49417), //define port
+        .sin_addr.s_addr = INADDR_ANY //accept connection at any address available
+    };
+    tcp_handler_t* tcp_handler = tcpHandlerInit(server_addr, 100);
+
+    pthread_create(&tcp_tid, NULL, &tcpHandlerMain, tcp_handler);
+    /*************************************************/
+
+    dataproc_t* data_proc = dataprocCreate(100);
+    
     printf("LASER_PULSE_PERIOD= %f\n", LASER_PULSE_PERIOD);
 
     gpioCfgClock(1, PI_CLOCK_PCM,0); //1us sample rate, PCM clock
@@ -70,17 +93,20 @@ int main ()
     gpioSetMode(LASER_ENABLE_PIN, PI_OUTPUT);
     gpioSetMode(LASER_PULSE_PIN, PI_OUTPUT);
     gpioSetMode(LASER_SHUTTER_PIN, PI_OUTPUT);
-    gpioWrite(LASER_SHUTTER_PIN, !LASER_PULSE_POL); // initialise to low
-    gpioWrite(LASER_ENABLE_PIN, !LASER_PULSE_POL); // initialise to low
+    gpioWrite(LASER_SHUTTER_PIN, 0); // initialise to low
+    gpioWrite(LASER_ENABLE_PIN, 0); // initialise to low
     
     //Non-incrementing write to CONFIG2 reg (address 0x01)
     //Clear CONFIG2 to configure 2 calibration clock periods,
     // no averaging, and single stop signal operation
-    char config2_cmds[] = {0x41, 0x00};
+    char config2_cmds[] = {
+        TDC_CMD(0, 1, TDC_CONFIG2),
+        TDC_CONFIG2_BITS(TDC_CAL_2, TDC_AVG_1CYC, 1)
+    };
     char config2_rx[sizeof(config2_cmds)];
 
-    // char* config2_rx = spiTransact(tdc.spi_handle, config2_cmds, sizeof(config2_cmds));
-    printf("config2 spiWrite=%d\n",spiTransact(tdc.spi_handle, config2_cmds, config2_rx, sizeof(config2_cmds)));    
+    // char* config2_rx = spiXfer(tdc.spi_handle, config2_cmds, sizeof(config2_cmds));
+    printf("config2 spiWrite=%d\n",spiXfer(tdc.spi_handle, config2_cmds, config2_rx, sizeof(config2_cmds)));    
     printf("config2_rx=");
     printArray(config2_rx, sizeof(config2_rx));
     /****************************************/
@@ -118,7 +144,7 @@ int main ()
             };
             char meas_cmds_rx[sizeof(meas_cmds)];
             
-            printf("meas_command spiTransact=%d\n",spiTransact(tdc.spi_handle, meas_cmds,meas_cmds_rx, sizeof(meas_cmds)));
+            printf("meas_command spiXfer=%d\n",spiXfer(tdc.spi_handle, meas_cmds,meas_cmds_rx, sizeof(meas_cmds)));
             printf("meas_command write response = ");
             printArray(meas_cmds_rx, sizeof(meas_cmds_rx));
             gpioDelay(10); // small delay to allow TDC to process data
@@ -195,8 +221,8 @@ int main ()
              * reading 9 bytes to obtain the 3-byte long TIME1, CLOCK_COUNT1, 
              * and TIME2 registers.
              */
-            const char tx_buff1[10] = {0x90}; // start an auto incrementing read to read TIME1, CLOCK_COUNT1, TIME2 in a single command
-            printf("Transaction 1 spiXfer=%d\n",spiTransact(tdc.spi_handle, tx_buff1, rx_buff, sizeof(tx_buff1)));
+            char tx_buff1[10] = {0x90}; // start an auto incrementing read to read TIME1, CLOCK_COUNT1, TIME2 in a single command
+            spiXfer(tdc.spi_handle, tx_buff1, rx_buff, sizeof(tx_buff1));
             
             //print returned data
             printf("rx_buff after transaction 1=");
@@ -211,7 +237,7 @@ int main ()
              * byte of the return buffer will always be 0
              */
             char tx_buff2[7] = {TDC_CMD(1, 0, TDC_CALIBRATION1)}; //auto incrementing read of CALIBRATION1 and CALIBRATION2
-            printf("Transaction 2 spiXfer=%d\n", spiTransact(tdc.spi_handle, tx_buff2, rx_buff+sizeof(tx_buff1),sizeof(tx_buff2)));
+            spiXfer(tdc.spi_handle, tx_buff2, rx_buff+sizeof(tx_buff1),sizeof(tx_buff2));
 
             // print returne data
             printf("rx_buff after txaction 2=");
@@ -249,7 +275,7 @@ int main ()
                 char tx_temp[4] = {tof_cmds[i]};
                 char rx_temp[4];
 
-                printf("Command %02X transaction=%d\n",tof_cmds[i], spiTransact(tdc.spi_handle, tx_temp, rx_temp, sizeof(tx_temp)));
+                printf("Command %02X transaction=%d\n",tof_cmds[i], spiXfer(tdc.spi_handle, tx_temp, rx_temp, sizeof(tx_temp)));
                 printf("Command %02X return=", tof_cmds[i]);
                 printArray(rx_temp, sizeof(rx_temp));
 
@@ -282,7 +308,7 @@ int main ()
             double time = getEpochTime();
 
             char data_str[70];
-            int data_str_len = buildDataStr(data_str, time, dist, ToF, true);
+            int data_str_len = sprintf(data_str, "%lf,%lf,%lf\n", time, dist, ToF);
 
             printf("logger state = %d\n", logger->status);
             loggerSendLogMsg(logger, data_str, data_str_len, "./tof_vals.txt", 0, true);            

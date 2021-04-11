@@ -6,14 +6,9 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <time.h>
 #include <unistd.h>
 
-#include "data_processor.h"
-
 #define LIGHT_SPEED 299792458.0
-#define DATA_SEPARATOR ','
-
 
 // Constructs a TDC command byte from the given parameters
 #define TDC_CMD(auto_inc, write, tdc_addr) (auto_inc << 7) | (write << 6) | (tdc_addr)
@@ -62,12 +57,12 @@ enum TDC_REG_ADDR {
     TDC_CALIBRATION2
 };
 
-enum TDC_CAL2_PERIODS
+enum TDC_CAL_PERIODS
 {
-    TDC_CAL2_2,
-    TDC_CAL2_10,
-    TDC_CAL2_20,
-    TDC_CAL2_40
+    TDC_CAL_2,
+    TDC_CAL_10,
+    TDC_CAL_20,
+    TDC_CAL_40
 };
 
 enum TDC_AVG_CYCLES
