@@ -2,3 +2,4 @@
 *.o
 code
 *.code-workspace
+*.out
