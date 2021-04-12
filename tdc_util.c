@@ -5,7 +5,7 @@ void printArray(char* arr, int arr_size)
 {
     for (int i = 0; i < arr_size; i++)
     {
-        printf("%X ", arr[i]);
+        printf("%02X ", arr[i]);
     }
     printf("\n");
 } // end printArray()
@@ -34,7 +34,7 @@ bool checkOddParity(uint32_t n)
 /**Assumes tdc_data to be a 5-element array of uint32_t of the following form:
  * [TIME1],[CLOCK_COUNT1],[TIME2],[CALIBRATION1],[CALIBRATION2] 
  */
-double calcToF(uint32_t* tdc_data, uint32_t cal_periods, uint32_t clk_freq)
+double calcToF(uint32_t* tdc_data, uint8_t cal_periods, uint32_t clk_freq)
 {
     double ToF;
     double time1 = tdc_data[0];

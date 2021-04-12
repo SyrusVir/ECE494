@@ -1,34 +1,44 @@
 #define _GNU_SOURCE
-#include <time.h>
+#include <sys/time.h>
 #include "tdc_util.h"
 #include "logger.h"
 #include "data_processor.h"
 #include "tcp_handler.h"
 
-
 #define AUTOINC_METHOD
 // #define DEBUG
 
-#define TDC_CAL_PERIODS 2
-
 //TEST definitions
-#define TDC_CLK_PIN 4   // physical pin 7; GPIOCLK0 for TDC reference
-#define TDC_ENABLE_PIN 27   // physical pin 13; TDC Enable
-#define TDC_INT_PIN 22  // physical pin 15; TDC interrupt pin
-#define TDC_BAUD (uint32_t) 20E6
-#define TDC_START_PIN 23         // physical pin 16; provides TDC start signal for debugging 
-#define TDC_STOP_PIN 18         // physical pin 12; provides TDC stop signal for debugging 
+#define TDC_CLK_PIN 4     // physical pin 7; GPIOCLK0 for TDC reference
+#define TDC_ENABLE_PIN 27 // physical pin 13; TDC Enable
+#define TDC_INT_PIN 22    // physical pin 15; TDC interrupt pin
+#define TDC_BAUD (uint32_t)20E6
+#define TDC_START_PIN 23 // physical pin 16; provides TDC start signal for debugging
+#define TDC_STOP_PIN 18  // physical pin 12; provides TDC stop signal for debugging
 #define TDC_TIMEOUT_USEC (uint32_t)5E6
-#define TDC_CLK_FREQ (uint32_t)19.2E6/2
+#define TDC_CLK_FREQ (uint32_t)19.2E6 / 2
 
 //Laser pin defintions
-#define LASER_ENABLE_PIN 26     // physical pin 37; must be TTL HI to allow emission
-#define LASER_SHUTTER_PIN 6     // physical pin 31; must be TTL HI to allow emission; wait 500 ms after raising
-#define LASER_PULSE_PIN 23      // physical pin 16; outputs trigger pulses to laser driver
+#define LASER_ENABLE_PIN 26 // physical pin 37; must be TTL HI to allow emission
+#define LASER_SHUTTER_PIN 6 // physical pin 31; must be TTL HI to allow emission; wait 500 ms after raising
+#define LASER_PULSE_PIN 23  // physical pin 16; outputs trigger pulses to laser driver
 #define LASER_PULSE_COUNT 2
 #define LASER_PULSE_FREQ 10e3
-#define LASER_PULSE_PERIOD 1/(LASER_PULSE_FREQ) * 1E6
-#define LASER_PULSE_POL 1       // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI 
+#define LASER_PULSE_PERIOD 1 / (LASER_PULSE_FREQ)*1E6
+#define LASER_PULSE_POL 1 // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI
+#define LASER_ACQ_USEC 60E6
+
+#define TCP_PORT 49417
+
+typedef struct DataProcArg
+{
+    logger_t *logger;
+    tcp_handler_t *tcp_handler;
+    tdc_t *tdc;
+    char *raw_tdc_data;
+    int raw_tdc_size;
+    bool data_break;
+} arg_t;
 
 double getEpochTime()
 {
@@ -38,33 +48,135 @@ double getEpochTime()
     return tv.tv_sec + tv.tv_usec * 1E-6;
 }
 
-int main () 
+// This funciton will be executed in the data processor's thread
+void *dataprocFunc(void *arg)
+{
+    struct DataProcArg *tdc_arg = (struct DataProcArg *)arg;
+
+    bool valid_data_flag = true;
+    double ToF;
+    uint32_t tdc_data[5];
+
+    // static array of rx_buff indices pointing to TDC register data within array of raw bytes
+    static uint8_t const rx_data_idx[] = {
+        1,  // TIME1 data start index
+        4,  // CLOCK_COUNT1 data start index
+        7,  // TIME2 data start index
+        11, // CALIBRATION1 data start index
+        14  // CLAIBRATION2 data start index
+    };
+
+    /******** Converting Data into 32-bit Numbers ********/
+    /**Iterate over the indices in rx_data_idx, converting the 
+     * subset of 3 bytes starting at rx_buff[rx_data_idx[i]]
+     */
+    for (uint8_t i = 0; i < 5; i++)
+    {
+#ifdef AUTOINC_METHOD
+        uint32_t conv = convertSubsetToLong(tdc_arg->raw_tdc_data + rx_data_idx[i], 3, true);
+#else
+        uint32_t conv = convertSubsetToLong(tdc_arg->raw_tdc_data + i * 4, 4, true);
+#endif
+
+        if (checkOddParity(conv))
+        {
+            valid_data_flag = false;
+            break;
+        }
+
+        tdc_data[i] = conv & ~TDC_PARITY_MASK; // clear the parity bit from data
+    }
+    /*****************************************************/
+
+    valid_data_flag = true;
+    printf("valid=%d\n", valid_data_flag);
+
+    if (valid_data_flag)
+    {
+        uint8_t cal_periods;
+        switch (tdc_arg->tdc->cal_periods)
+        {
+        case TDC_CAL_2:
+            cal_periods = 2;
+            break;
+        case TDC_CAL_10:
+            cal_periods = 10;
+            break;
+        case TDC_CAL_20:
+            cal_periods = 20;
+            break;
+        case TDC_CAL_40:
+            cal_periods = 40;
+            break;
+        }
+
+        ToF = calcToF(tdc_data, cal_periods, tdc_arg->tdc->clk_freq);
+    } // end if (valid_data_flag)
+    else
+    {
+        // if any invalid data retrieved from TDC, set negative ToF
+        printf("Invalid data\n");
+        ToF = -1;
+    } //end else linked to if (valid_data_flag)
+
+    double dist = calcDist(ToF);
+    double time = getEpochTime();
+
+    char data_str[70];
+
+    // holds number of characters in data_str excluding NULL
+    int data_str_len = sprintf(data_str, "%lf,%lf,%lf%c\n", time, dist, ToF);
+    if (tdc_arg->data_break)
+    {
+        data_str[data_str_len] = '\n';
+        data_str[++data_str_len] = '\0';
+    }
+
+    if (tdc_arg->logger != NULL)
+    {
+        printf("logger state = %d\n", tdc_arg->logger->status);
+        loggerSendLogMsg(tdc_arg->logger, data_str, data_str_len, "./tof_vals.txt", 0, true);
+    }
+    if (tdc_arg->tcp_handler != NULL && tdc_arg->tcp_handler->tcp_state == TCPH_STATE_CONNECTED)
+    {
+        tcpHandlerWrite(tdc_arg->tcp_handler, data_str, data_str_len, 0, true);
+    }
+
+    free(tdc_arg);
+    return NULL;
+}
+
+int main()
 {
     /********* Threaded Logger Configuration ********/
     pthread_t logger_tid;
-    logger_t* logger = loggerCreate(100);
+    logger_t *logger = loggerCreate(100);
 
     // start loggerMain, passing the configured logger struct as argument
-    pthread_create(&logger_tid, NULL, &loggerMain, logger); 
+    pthread_create(&logger_tid, NULL, &loggerMain, logger);
     /************************************************/
 
     /********** TCP Handler Configuration **********/
     pthread_t tcp_tid;
     struct sockaddr_in server_addr = {
-        .sin_family = AF_INET, //TCP
-        .sin_port = htons(49417), //define port
+        .sin_family = AF_INET,        //TCP
+        .sin_port = htons(TCP_PORT),  //define port
         .sin_addr.s_addr = INADDR_ANY //accept connection at any address available
     };
-    tcp_handler_t* tcp_handler = tcpHandlerInit(server_addr, 100);
+    tcp_handler_t *tcp_handler = tcpHandlerInit(server_addr, 100);
 
     pthread_create(&tcp_tid, NULL, &tcpHandlerMain, tcp_handler);
     /*************************************************/
 
-    dataproc_t* data_proc = dataprocCreate(100);
-    
+    /********* Data Processor Configuraiton *********/
+    pthread_t data_proc_tid;
+    dataproc_t *data_proc = dataprocCreate(100);
+    pthread_create(&tcp_tid, NULL, &dataprocMain, data_proc);
+    /************************************************/
+
     printf("LASER_PULSE_PERIOD= %f\n", LASER_PULSE_PERIOD);
 
-    gpioCfgClock(1, PI_CLOCK_PCM,0); //1us sample rate, PCM clock
+    gpioCfgClock(1, PI_CLOCK_PCM, 0); //1us sample rate, PCM clock
     gpioInitialise();
 
     /******** TDC Initialization *********/
@@ -73,16 +185,16 @@ int main ()
         .enable_pin = TDC_ENABLE_PIN,
         .int_pin = TDC_INT_PIN,
         .clk_pin = TDC_CLK_PIN,
-        .clk_freq = TDC_CLK_FREQ
-    };
+        .clk_freq = TDC_CLK_FREQ,
+        .cal_periods = TDC_CAL_2};
     tdcInit(&tdc, TDC_BAUD);
 
-    printf("tdc.spi_handle=%d\n",tdc.spi_handle);
+    printf("tdc.spi_handle=%d\n", tdc.spi_handle);
 
-    // enable additional pins for debugging         
-    gpioSetMode(TDC_START_PIN, PI_OUTPUT);     // active LOW
-    gpioSetMode(TDC_STOP_PIN, PI_OUTPUT);     // active LOW
-    
+    // enable additional pins for debugging
+    gpioSetMode(TDC_START_PIN, PI_OUTPUT); // active LOW
+    gpioSetMode(TDC_STOP_PIN, PI_OUTPUT);  // active LOW
+
     // TDC must see rising edge of ENABLE while powered for proper internal initializaiton
     gpioWrite(tdc.enable_pin, 0);
     gpioDelay(3); // Short delay to make sure TDC sees LOW before rising edge
@@ -94,24 +206,20 @@ int main ()
     gpioSetMode(LASER_PULSE_PIN, PI_OUTPUT);
     gpioSetMode(LASER_SHUTTER_PIN, PI_OUTPUT);
     gpioWrite(LASER_SHUTTER_PIN, 0); // initialise to low
-    gpioWrite(LASER_ENABLE_PIN, 0); // initialise to low
-    
+    gpioWrite(LASER_ENABLE_PIN, 0);  // initialise to low
+
     //Non-incrementing write to CONFIG2 reg (address 0x01)
     //Clear CONFIG2 to configure 2 calibration clock periods,
     // no averaging, and single stop signal operation
     char config2_cmds[] = {
         TDC_CMD(0, 1, TDC_CONFIG2),
-        TDC_CONFIG2_BITS(TDC_CAL_2, TDC_AVG_1CYC, 1)
-    };
+        TDC_CONFIG2_BITS(tdc.cal_periods, TDC_AVG_1CYC, 1)};
     char config2_rx[sizeof(config2_cmds)];
 
-    // char* config2_rx = spiXfer(tdc.spi_handle, config2_cmds, sizeof(config2_cmds));
-    printf("config2 spiWrite=%d\n",spiXfer(tdc.spi_handle, config2_cmds, config2_rx, sizeof(config2_cmds)));    
-    printf("config2_rx=");
-    printArray(config2_rx, sizeof(config2_rx));
+    spiXfer(tdc.spi_handle, config2_cmds, config2_rx, sizeof(config2_cmds));
     /****************************************/
-    
-    while (1)
+
+    while (1) // begin main loop
     {
         static bool shutter_state = 0;
         static bool enable_state = 0;
@@ -122,212 +230,167 @@ int main ()
         printf("Enter P to begin a TDC measurement.\n");
         printf("Enter 'q' or 'Q' to quit.\n");
         scanf(" %c", &c);
-        if (c == 'q' || c == 'Q') break;
+        if (c == 'q' || c == 'Q')
+            break;
         else if (c == 'S')
         {
             shutter_state = !shutter_state;
-            gpioWrite(LASER_SHUTTER_PIN,shutter_state);
+            gpioWrite(LASER_SHUTTER_PIN, shutter_state);
             continue;
         }
         else if (c == 'E')
         {
             enable_state = !enable_state;
-            gpioWrite(LASER_ENABLE_PIN,enable_state);
+            gpioWrite(LASER_ENABLE_PIN, enable_state);
             continue;
         }
         else if (c == 'P')
         {
             //start new measurement on TDC
             static char meas_cmds[2] = {
-                0x40,   //Write to CONFIG1
-                0x43    //Start measurement in mode 2 with parity and rising edge start, stop, trigger signals 
+                0x40, //Write to CONFIG1
+                0x43  //Start measurement in mode 2 with parity and rising edge start, stop, trigger signals
             };
             char meas_cmds_rx[sizeof(meas_cmds)];
-            
-            printf("meas_command spiXfer=%d\n",spiXfer(tdc.spi_handle, meas_cmds,meas_cmds_rx, sizeof(meas_cmds)));
+
+            printf("meas_command spiXfer=%d\n", spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds)));
             printf("meas_command write response = ");
             printArray(meas_cmds_rx, sizeof(meas_cmds_rx));
             gpioDelay(10); // small delay to allow TDC to process data
 
-            #ifdef DEBUG
-            //DEBUGGING: wait a know period of time and send a stop pulse
-            gpioWrite(TDC_START_PIN, 1);
-            gpioDelay(5);
-            gpioWrite(TDC_STOP_PIN, 1);
-
-            gpioWrite(TDC_START_PIN,0);
-            gpioWrite(TDC_STOP_PIN,0);
-            #else
-            // send train of laser pulses
-            for (int i = 0; i < LASER_PULSE_COUNT; i++)
+            uint32_t start_tick = gpioTick();
+            while ((gpioTick() - start_tick) < LASER_ACQ_USEC) // main data acquisition loop
             {
-                gpioWrite(LASER_PULSE_PIN,LASER_PULSE_POL);
-                gpioDelay(LASER_PULSE_PERIOD/2);
-                gpioWrite(LASER_PULSE_PIN,!LASER_PULSE_POL);
-                gpioDelay(LASER_PULSE_PERIOD/2);
-            }
-            #endif
-        }
-        else continue;
+                #ifdef DEBUG
+                //DEBUGGING: wait a know period of time and send a stop pulse
+                gpioWrite(TDC_START_PIN, 1);
+                gpioDelay(5);
+                gpioWrite(TDC_STOP_PIN, 1);
 
-
-        //Poll TDC INT pin to signal available data
-        uint32_t curr_tick = gpioTick();
-        while (gpioRead(tdc.int_pin) && (gpioTick() - curr_tick)  < TDC_TIMEOUT_USEC);
-
-        if (!gpioRead(tdc.int_pin)) //if TDC returned in time
-        {
-            /********* Variable Declarations *********/
-            uint32_t time1;         // internal clock counts from START edge to next external clock edge 
-            uint32_t clock_count1;  // external clock counts from TIME1 to STOP edge
-            uint32_t time2;         // internal clock counts from CLOCK_COUNT1 to next external clock edge
-            uint32_t calibration1;
-            uint32_t calibration2;
-            double ToF;
-            
-            /**array to holds return bytes from both SPI transactions retrieving Measurement registers
-             * TIME1, CLOCK_COUNT1, TIME2, CALIBRATION1, CALIBRATION2 in that order.
-             * These registers are 24-bits long where the MSb is a parity bit.
-             * Hence rx_buff holds 5 3-byte data chars and 2 1-byte command chars (17 bytes total)
-             * rx_buff[0] = 0 (junk data from Transaction 1 command byte)
-             * rx_buff[1-3] = TIME1 bytes in big-endian order
-             * rx_buff[4-6] = CLOCK_COUNT1 bytes in big-endian order
-             * rx_buff[7-9] = TIME2 bytes in big-endian order
-             * rx_buff[10] = 0 (junk data from Transaction 2 command byte)
-             * rx_buff[11-13] = CALIBRATION1 in big-endian order
-             * rx_buff[14-16] = CALIBRATION2 in big-endian order
-             */ 
-            char rx_buff[17];
-            
-            // static array of rx_buff indices pointing to TDC register data
-            static uint8_t const rx_data_idx[] = {
-                1,  // TIME1 data start index
-                4,  // CLOCK_COUNT1 data start index
-                7,  // TIME2 data start index
-                11, // CALIBRATION1 data start index
-                14  // CLAIBRATION2 data start index
-            };
-
-            // array to hold converted Measurement Register values in same order as rx_buff
-            uint32_t tdc_data[sizeof(rx_data_idx)/sizeof(*rx_data_idx)]; 
-
-            // false if parity of any received data is not even
-            bool valid_data_flag = true; 
-            /*******************************************/
-
-            #ifdef AUTOINC_METHOD
-            /******** Transaction 1 *********/
-            /**Transaction 1 starts an auto-incrementing read at register TIME1,
-             * reading 9 bytes to obtain the 3-byte long TIME1, CLOCK_COUNT1, 
-             * and TIME2 registers.
-             */
-            char tx_buff1[10] = {0x90}; // start an auto incrementing read to read TIME1, CLOCK_COUNT1, TIME2 in a single command
-            spiXfer(tdc.spi_handle, tx_buff1, rx_buff, sizeof(tx_buff1));
-            
-            //print returned data
-            printf("rx_buff after transaction 1=");
-            printArray(rx_buff, sizeof(rx_buff));
-
-            /*********************************/
-
-            /********* Transaction 2 *********/
-            /**Transaciton 2 starts an auto-incrementing read at register CALIBRATION1
-             * and reads the 24-bit CALIBRATION1 and CALIBRATION2 registers. Hence, 
-             * the transaction sends 7 bytes (1 command, 6 reading bytes). The first
-             * byte of the return buffer will always be 0
-             */
-            char tx_buff2[7] = {TDC_CMD(1, 0, TDC_CALIBRATION1)}; //auto incrementing read of CALIBRATION1 and CALIBRATION2
-            spiXfer(tdc.spi_handle, tx_buff2, rx_buff+sizeof(tx_buff1),sizeof(tx_buff2));
-
-            // print returne data
-            printf("rx_buff after txaction 2=");
-            printArray(rx_buff, sizeof(rx_buff));
-            /*********************************/
-
-            /******** Converting Data into 32-bit Numbers ********/
-            /**Iterate over the indices in rx_data_idx, converting the 
-             * subset of 3 bytes starting at rx_buff[rx_data_idx[i]]
-             */
-            for (uint8_t i = 0; i < sizeof(rx_data_idx)/sizeof(*rx_data_idx); i++)
-            {
-                uint32_t conv = convertSubsetToLong(rx_buff+rx_data_idx[i], 3, true);
-                if (checkOddParity(conv)) 
+                gpioWrite(TDC_START_PIN, 0);
+                gpioWrite(TDC_STOP_PIN, 0);
+                #else
+                // send train of laser pulses
+                for (int i = 0; i < LASER_PULSE_COUNT; i++)
                 {
-                    valid_data_flag = false;
-                    break;
+                    gpioWrite(LASER_PULSE_PIN, LASER_PULSE_POL);
+                    gpioDelay(LASER_PULSE_PERIOD / 2);
+                    gpioWrite(LASER_PULSE_PIN, !LASER_PULSE_POL);
+                    gpioDelay(LASER_PULSE_PERIOD / 2);
                 }
-                
-                tdc_data[i] = conv & ~TDC_PARITY_MASK; // clear the parity bit from data
-            }
-            /*****************************************************/
-            #else
-            static char tof_cmds[5] = {
-                // TDC commands for retrieving TOF
-                0x10, //Read TIME1
-                0x11, //Read CLOCK_COUNT1
-                0x12, //Read TIME2
-                0x1B, //Read CALIBRATION
-                0x1C  //Read CALIBRATION2
-            };
-            
-            for (int i = 0; i < sizeof(tof_cmds); i++)
-            {
-                char tx_temp[4] = {tof_cmds[i]};
-                char rx_temp[4];
+                #endif
 
-                printf("Command %02X transaction=%d\n",tof_cmds[i], spiXfer(tdc.spi_handle, tx_temp, rx_temp, sizeof(tx_temp)));
-                printf("Command %02X return=", tof_cmds[i]);
-                printArray(rx_temp, sizeof(rx_temp));
+                //Poll TDC INT pin to signal available data
+                uint32_t curr_tick = gpioTick();
+                while (gpioRead(tdc.int_pin) && (gpioTick() - curr_tick) < tdc.timeout_us);
 
-                uint32_t conv = convertSubsetToLong(rx_temp, 4,true);
-                if (checkOddParity(conv))
+                if (!gpioRead(tdc.int_pin)) //if TDC returned in time
                 {
-                    valid_data_flag = false;
-                    break;
-                } 
-                tdc_data[i] = conv & ~TDC_PARITY_MASK; 
-                printf("rx_buff1 converted= %u\n", tdc_data[i]);
-            }
-            #endif
+                    bool valid_data_flag = true; // false if parity of any received data is not even
+                    uint32_t tdc_data[5];        // array to hold converted Measurement Register values in same order as rx_buff
 
-            valid_data_flag = true;
-            printf("valid=%d\n", valid_data_flag);
-            
-            if (valid_data_flag) 
-            {
-                ToF = calcToF(tdc_data,TDC_CAL_PERIODS, tdc.clk_freq);
-            } // end if (valid_data_flag)
-            else
-            {
-                // if any invalid data retrieved from TDC, set negative ToF
-                printf("Invalid data\n");
-                ToF = -1;
-            } //end else linked to if (valid_data_flag)
+                    #ifdef AUTOINC_METHOD
+                    /******** Transaction 1 *********/
+                    /**Transaction 1 starts an auto-incrementing read at register TIME1,
+                    * reading 9 bytes to obtain the 3-byte long TIME1, CLOCK_COUNT1, 
+                    * and TIME2 registers.
+                    */
 
-            double dist = calcDist(ToF);
-            double time = getEpochTime();
+                    /**array to holds return bytes from both SPI transactions retrieving Measurement registers
+                    * TIME1, CLOCK_COUNT1, TIME2, CALIBRATION1, CALIBRATION2 in that order.
+                    * These registers are 24-bits long where the MSb is a parity bit.
+                    * Hence rx_buff holds 5 3-byte data chars and 2 1-byte command chars (17 bytes total)
+                    * rx_buff[0] = 0 (junk data from Transaction 1 command byte)
+                    * rx_buff[1-3] = TIME1 bytes in big-endian order
+                    * rx_buff[4-6] = CLOCK_COUNT1 bytes in big-endian order
+                    * rx_buff[7-9] = TIME2 bytes in big-endian order
+                    * rx_buff[10] = 0 (junk data from Transaction 2 command byte)
+                    * rx_buff[11-13] = CALIBRATION1 in big-endian order
+                    * rx_buff[14-16] = CALIBRATION2 in big-endian order
+                    */
+                    char rx_buff[17];
 
-            char data_str[70];
-            int data_str_len = sprintf(data_str, "%lf,%lf,%lf\n", time, dist, ToF);
+                    char tx_buff1[10] = {0x90}; // start an auto incrementing read to read TIME1, CLOCK_COUNT1, TIME2 in a single command
+                    spiXfer(tdc.spi_handle, tx_buff1, rx_buff, sizeof(tx_buff1));
 
-            printf("logger state = %d\n", logger->status);
-            loggerSendLogMsg(logger, data_str, data_str_len, "./tof_vals.txt", 0, true);            
-        } // end if (!gpioRead(tdc.int_pin)), i.e. no timeout waiting for TDC
-        else //else timeout occured
-        {
-            printf("TDC timeout occured\n");
-        } // end else linked to if (!gpioRead(tdc.int_pin))
+                    //print returned data
+                    printf("rx_buff after transaction 1=");
+                    printArray(rx_buff, sizeof(rx_buff));
+
+                    /*********************************/
+
+                    /********* Transaction 2 *********/
+                    /**Transaciton 2 starts an auto-incrementing read at register CALIBRATION1
+                    * and reads the 24-bit CALIBRATION1 and CALIBRATION2 registers. Hence, 
+                    * the transaction sends 7 bytes (1 command, 6 reading bytes). The first
+                    * byte of the return buffer will always be 0
+                    */
+                    char tx_buff2[7] = {TDC_CMD(1, 0, TDC_CALIBRATION1)}; //auto incrementing read of CALIBRATION1 and CALIBRATION2
+                    spiXfer(tdc.spi_handle, tx_buff2, rx_buff + sizeof(tx_buff1), sizeof(tx_buff2));
+
+                    // print returne data
+                    printf("rx_buff after txaction 2=");
+                    printArray(rx_buff, sizeof(rx_buff));
+                    /*********************************/
+
+                    #else
+                    static char tof_cmds[5] = {
+                        // TDC commands for retrieving TOF
+                        0x10, //Read TIME1
+                        0x11, //Read CLOCK_COUNT1
+                        0x12, //Read TIME2
+                        0x1B, //Read CALIBRATION
+                        0x1C  //Read CALIBRATION2
+                    };
+                    static char rx_buff[sizeof(tof_cmds) * 4];
+
+                    for (int i = 0; i < sizeof(tof_cmds); i++)
+                    {
+                        char tx_temp[4] = {tof_cmds[i]};
+
+                        printf("Command %02X transaction=%d\n", tof_cmds[i], spiXfer(tdc.spi_handle, tx_temp, rx_buff + i * 4, sizeof(tx_temp)));
+                        printf("Command %02X return=", tof_cmds[i]);
+                        printArray(rx_buff + i * 4, 4);
+                    }
+                    #endif
+
+                    // allocate argument struct for data processor. Free inside data processor function
+                    struct DataProcArg *data = (struct DataProcArg *)malloc(sizeof(struct DataProcArg));
+                    data->data_break = true;
+                    data->logger = logger;
+                    data->raw_tdc_data = rx_buff;
+                    data->raw_tdc_size = sizeof(rx_buff);
+                    data->tcp_handler = tcp_handler;
+                    data->tdc = &tdc;
+
+                    dataprocSendData(data_proc, &dataprocFunc, (void *)data, 0, true);
+
+                }    // end if (!gpioRead(tdc.int_pin)), i.e. no timeout waiting for TDC
+                else //else timeout occured
+                {
+                    printf("TDC timeout occured\n");
+                } // end else linked to if (!gpioRead(tdc.int_pin))
+            } // end main data acquisitio loop; while((gpioTick() - start_tick) < ...)
+        } // end else if (c == 'P')
+        else
+            continue;
+
     } // end while(1)
 
-    #ifdef PIGPIO
     spiClose(tdc.spi_handle);
-    #else
-    close(tdc.spi_handle);
-    #endif
-    
+
+    tcpHandlerClose(tcp_handler, 0, true);
     loggerSendCloseMsg(logger, 0, true);
+    dataprocSendStop(data_proc, 0, true);
+
+    pthread_join(tcp_tid, NULL);
     pthread_join(logger_tid, NULL);
+    pthread_join(data_proc_tid, NULL);
+
     loggerDestroy(logger);
+    tcpHandlerDestroy(tcp_handler);
+    dataprocDestroy(data_proc);
+
     gpioHardwareClock(tdc.clk_pin, 0);
     gpioWrite(LASER_SHUTTER_PIN, 0);
     gpioWrite(LASER_ENABLE_PIN, 0);

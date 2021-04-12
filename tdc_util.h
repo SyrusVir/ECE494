@@ -12,7 +12,7 @@
 
 // Constructs a TDC command byte from the given parameters
 #define TDC_CMD(auto_inc, write, tdc_addr) (auto_inc << 7) | (write << 6) | (tdc_addr)
-#define TDC_PARITY_MASK 0x00800000  // bit mask for extracting parity bit from 24-bit data registers (TIMEn, CLOCK_COUNTN, etc.)
+#define TDC_PARITY_MASK 0x800000  // bit mask for extracting parity bit from 24-bit data registers (TIMEn, CLOCK_COUNTn, etc.)
 
 // constructs a byte to write to the TDC CONFIG1 regsiter
 #define TDC_CONFIG1_BITS(force_cal, parity, trigg_edge, stop_edge, start_edge, mode, start_meas) \
@@ -57,6 +57,7 @@ enum TDC_REG_ADDR {
     TDC_CALIBRATION2
 };
 
+// use when building CONFIG2 bits
 enum TDC_CAL_PERIODS
 {
     TDC_CAL_2,
@@ -65,6 +66,7 @@ enum TDC_CAL_PERIODS
     TDC_CAL_40
 };
 
+// use when building CONFIG2 bits
 enum TDC_AVG_CYCLES
 {
     TDC_AVG_1CYC,
@@ -76,10 +78,12 @@ enum TDC_AVG_CYCLES
     TDC_AVG_64CYC,
     TDC_AVG_128CYC
 };
+
 typedef struct TDC {
     int spi_handle;
-    uint32_t clk_freq;  // frequency of reference clock provided to TDC
-    uint32_t timeout_us;// microseconds to wait for INT pin to go LO
+    uint32_t clk_freq;                  // frequency of reference clock provided to TDC
+    uint32_t timeout_us;                // microseconds to wait for INT pin to go LO
+    enum TDC_CAL_PERIODS cal_periods;   // calibration period config bits
     uint8_t clk_pin;    // Proivdes TDC reference clock
     uint8_t enable_pin; // active HIGH
     uint8_t int_pin;    // Pin at which to read the TDC interrupt pin; active LO until next measurement
@@ -91,7 +95,7 @@ void printArray(char* arr, int arr_size);
 bool checkOddParity(uint32_t n);
 
 // Calculate time of flight in microseconds
-double calcToF(uint32_t* tdc_data, uint32_t cal_periods, uint32_t clk_freq);
+double calcToF(uint32_t* tdc_data, uint8_t cal_periods, uint32_t clk_freq);
 
 // Calculate distance in meters
 double calcDist(double ToF);
@@ -102,9 +106,9 @@ double calcDist(double ToF);
  */
 uint32_t convertSubsetToLong(char* start, int len, bool big_endian);
 
-/**Opens an SPI connection using the desired SPI library (spidev or pigpio; #define PIGPIO to use pigpio)
- * Also initializes pins specified in the passed tdc struct. Assign desired pins and reference clock frequency
- * prior to passing to this function
+/**Opens an SPI connection using pigpio SPI.Also initializes 
+ * pins specified in the passed tdc struct. Assign desired 
+ * pins and reference clock frequency prior to passing to this function
  */
 int tdcInit(tdc_t* tdc, int baud);
 
