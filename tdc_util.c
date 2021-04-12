@@ -7,7 +7,6 @@ void printArray(char* arr, int arr_size)
     {
         printf("%02X ", arr[i]);
     }
-    printf("\n");
 } // end printArray()
 
 //Returns true if n has odd parity
