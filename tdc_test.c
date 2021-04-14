@@ -13,7 +13,7 @@
 #define TDC_CLK_PIN 4     // physical pin 7; GPIOCLK0 for TDC reference
 #define TDC_ENABLE_PIN 27 // physical pin 13; TDC Enable
 #define TDC_INT_PIN 22    // physical pin 15; TDC interrupt pin
-#define TDC_BAUD (uint32_t)20E6
+#define TDC_BAUD (uint32_t)250E6/64
 #define TDC_START_PIN 24 // physical pin 18; provides TDC start signal for debugging
 #define TDC_STOP_PIN 18  // physical pin 12; provides TDC stop signal for debugging
 #define TDC_TIMEOUT_USEC (uint32_t)5E6
@@ -23,11 +23,11 @@
 #define LASER_ENABLE_PIN 26 // physical pin 37; must be TTL HI to allow emission
 #define LASER_SHUTTER_PIN 6 // physical pin 31; must be TTL HI to allow emission; wait 500 ms after raising
 #define LASER_PULSE_PIN 23  // physical pin 16; outputs trigger pulses to laser driver
-#define LASER_PULSE_COUNT 2
+#define LASER_PULSE_COUNT 1
 #define LASER_PULSE_FREQ 10e3
 #define LASER_PULSE_PERIOD 1 / (LASER_PULSE_FREQ)*1E6
 #define LASER_PULSE_POL 1 // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI
-#define LASER_ACQ_USEC (uint32_t)1E6
+#define LASER_ACQ_USEC (uint32_t)5e3
 #define OUT_FILE "./all_vals.txt"
 
 #define TCP_PORT 49417
@@ -55,7 +55,7 @@ void *dataprocFunc(void *arg)
 {
     struct DataProcArg *tdc_arg = (struct DataProcArg *)arg;
 
-    printf("dataprocFunc: %p\n", tdc_arg->raw_tdc_data);
+    // printf("dataprocFunc: %p\n", tdc_arg->raw_tdc_data);
     bool valid_data_flag = true;
     double ToF;
     uint32_t tdc_data[5];
@@ -92,7 +92,7 @@ void *dataprocFunc(void *arg)
     /*****************************************************/
 
     valid_data_flag = true;
-    printf("valid=%d\n", valid_data_flag);
+    // printf("valid=%d\n", valid_data_flag);
 
     if (valid_data_flag)
     {
@@ -139,7 +139,7 @@ void *dataprocFunc(void *arg)
     /********** pass data to logger and tcp consumers if available **********/ 
     if (tdc_arg->logger != NULL)
     {
-        printf("logger state = %d\n", tdc_arg->logger->status);
+        // printf("logger state = %d\n", tdc_arg->logger->status);
         loggerSendLogMsg(tdc_arg->logger, data_str, data_str_len, OUT_FILE, 0, true);
     }
     if (tdc_arg->tcp_handler != NULL && tdc_arg->tcp_handler->tcp_state == TCPH_STATE_CONNECTED)
@@ -185,7 +185,9 @@ int main()
     /********* Data Processor Configuraiton *********/
     pthread_t data_proc_tid;
     dataproc_t *data_proc = dataprocCreate(100);
-    pthread_create(&tcp_tid, NULL, &dataprocMain, data_proc);
+
+
+    pthread_create(&data_proc_tid, NULL, &dataprocMain, data_proc);
     /************************************************/
     
     char hdr_strs[] = 
@@ -208,7 +210,7 @@ int main()
         .cal_periods = TDC_CAL_2};
     tdcInit(&tdc, TDC_BAUD);
 
-    printf("tdc.spi_handle=%d\n", tdc.spi_handle);
+    // printf("tdc.spi_handle=%d\n", tdc.spi_handle);
 
     // enable additional pins for debugging
     gpioSetMode(TDC_START_PIN, PI_OUTPUT); // active LOW
@@ -272,10 +274,7 @@ int main()
             };
             char meas_cmds_rx[sizeof(meas_cmds)];
 
-            printf("meas_command spiXfer=%d\n", spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds)));
-            printf("meas_command write response = ");
-            printArray(meas_cmds_rx, sizeof(meas_cmds_rx));
-            printf("\n");
+            spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds));
             gpioDelay(10); // small delay to allow TDC to process data
 
             uint32_t start_tick = gpioTick();
@@ -287,8 +286,8 @@ int main()
                 gpioDelay(5);
                 gpioWrite(TDC_STOP_PIN, 1);
 
-                gpioWrite(TDC_START_PIN, 0);
                 gpioWrite(TDC_STOP_PIN, 0);
+                gpioWrite(TDC_START_PIN, 0);
                 #else
                 // send train of laser pulses
                 for (int i = 0; i < LASER_PULSE_COUNT; i++)
@@ -301,6 +300,10 @@ int main()
                     gpioWrite(LASER_PULSE_PIN, !LASER_PULSE_POL);
                     gpioDelay(LASER_PULSE_PERIOD / 2);
                 }
+
+                // gpioDelay(20);
+                gpioTrigger(TDC_STOP_PIN, 3, 1);
+                gpioWrite(TDC_START_PIN, 0);
                 #endif
 
                 //Poll TDC INT pin to signal available data
@@ -334,9 +337,9 @@ int main()
                     spiXfer(tdc.spi_handle, tx_buff1, rx_buff, sizeof(tx_buff1));
 
                     //print returned data
-                    printf("rx_buff after transaction 1=");
-                    printArray(rx_buff, 17);
-                    printf("\n");
+                    // printf("rx_buff after transaction 1=");
+                    // printArray(rx_buff, 17);
+                    // printf("\n");
 
                     /*********************************/
 
@@ -350,11 +353,10 @@ int main()
                     spiXfer(tdc.spi_handle, tx_buff2, rx_buff + sizeof(tx_buff1), sizeof(tx_buff2));
 
                     // print returne data
-                    printf("rx_buff after txaction 2=");
+                    // printf("rx_buff after txaction 2=");
                     printArray(rx_buff, 17);
                     printf("\n");
                     /*********************************/
-                    #else
                     static char tof_cmds[5] = {
                         // TDC commands for retrieving TOF
                         0x10, //Read TIME1
@@ -363,17 +365,18 @@ int main()
                         0x1B, //Read CALIBRATION
                         0x1C  //Read CALIBRATION2
                     };
-                    static char rx_buff[sizeof(tof_cmds) * 4];
+                    static char rx_buff1[sizeof(tof_cmds) * 4];
 
                     for (int i = 0; i < sizeof(tof_cmds); i++)
                     {
                         char tx_temp[4] = {tof_cmds[i]};
 
-                        printf("Command %02X transaction=%d\n", tof_cmds[i], spiXfer(tdc.spi_handle, tx_temp, rx_buff + i * 4, sizeof(tx_temp)));
+                        spiXfer(tdc.spi_handle, tx_temp, rx_buff1 + i * 4, sizeof(tx_temp));
                         printf("Command %02X return=", tof_cmds[i]);
-                        printArray(rx_buff + i * 4, 4);
+                        printArray(rx_buff1 + i * 4, 4);
                         printf("\n");
                     }
+                    #else
                     #endif
 
                     // allocate argument struct for data processor. Free inside data processor function

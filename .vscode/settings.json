@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "code.h": "c",
-        "tcp_handler.h": "c"
+        "tcp_handler.h": "c",
+        "tdc_util.h": "c"
     }
 }
