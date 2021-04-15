@@ -7,7 +7,7 @@
 #include "tcp_handler.h"
 
 #define AUTOINC_METHOD
-#define DEBUG
+// #define DEBUG
 
 //TEST definitions
 #define TDC_CLK_PIN 4     // physical pin 7; GPIOCLK0 for TDC reference
@@ -23,11 +23,11 @@
 #define LASER_ENABLE_PIN 26 // physical pin 37; must be TTL HI to allow emission
 #define LASER_SHUTTER_PIN 6 // physical pin 31; must be TTL HI to allow emission; wait 500 ms after raising
 #define LASER_PULSE_PIN 23  // physical pin 16; outputs trigger pulses to laser driver
-#define LASER_PULSE_COUNT 1
+#define LASER_PULSE_COUNT 2
 #define LASER_PULSE_FREQ 10e3
 #define LASER_PULSE_PERIOD 1 / (LASER_PULSE_FREQ)*1E6
 #define LASER_PULSE_POL 1 // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI
-#define LASER_ACQ_USEC (uint32_t)5e3
+#define LASER_ACQ_USEC (uint32_t)60e6
 #define OUT_FILE "./all_vals.txt"
 
 #define TCP_PORT 49417
@@ -129,7 +129,7 @@ void *dataprocFunc(void *arg)
 
     // holds number of characters in data_str excluding NULL
     int data_str_len = sprintf(data_str, "%lf,%lf,%lf,%u,%u,%u,%u,%u\n",
-                        time, dist, ToF, tdc_data[0], tdc_data[1], tdc_data[2], tdc_data[3], tdc_data[4]);
+                        time, dist, ToF*1e6, tdc_data[0], tdc_data[1], tdc_data[2], tdc_data[3], tdc_data[4]);
     if (tdc_arg->data_break)
     {
         data_str[data_str_len] = '\n';
@@ -191,7 +191,7 @@ int main()
     /************************************************/
     
     char hdr_strs[] = 
-        "TIMESTAMP (s),TOF (usec),DIST (m),TIME1,CLOCK_COUNT1,TIME2,CAL1,CAL2\n";
+        "TIMESTAMP (s),DIST (m),TOF (usec),TIME1,CLOCK_COUNT1,TIME2,CAL1,CAL2\n";
 
     loggerSendLogMsg(logger, hdr_strs, sizeof(hdr_strs), OUT_FILE, 0, true);
 
@@ -354,9 +354,11 @@ int main()
 
                     // print returne data
                     // printf("rx_buff after txaction 2=");
-                    printArray(rx_buff, 17);
-                    printf("\n");
+                    // printArray(rx_buff, 17);
+                    // printf("\n");
                     /*********************************/
+                    #else
+
                     static char tof_cmds[5] = {
                         // TDC commands for retrieving TOF
                         0x10, //Read TIME1
@@ -372,16 +374,15 @@ int main()
                         char tx_temp[4] = {tof_cmds[i]};
 
                         spiXfer(tdc.spi_handle, tx_temp, rx_buff1 + i * 4, sizeof(tx_temp));
-                        printf("Command %02X return=", tof_cmds[i]);
-                        printArray(rx_buff1 + i * 4, 4);
-                        printf("\n");
+                        // printf("Command %02X return=", tof_cmds[i]);
+                        // printArray(rx_buff1 + i * 4, 4);
+                        // printf("\n");
                     }
-                    #else
                     #endif
 
                     // allocate argument struct for data processor. Free inside data processor function
                     struct DataProcArg *data = (struct DataProcArg *)malloc(sizeof(struct DataProcArg));
-                    data->data_break = true;
+                    data->data_break = false;
                     data->logger = logger;
                     data->raw_tdc_data = rx_buff;
                     data->raw_tdc_size = sizeof(rx_buff);
