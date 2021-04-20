@@ -17,8 +17,8 @@
 #define TDC_START_PIN 24 // physical pin 18; provides TDC start signal for debugging
 #define TDC_STOP_PIN 18  // physical pin 12; provides TDC stop signal for debugging
 #define TDC_TIMEOUT_USEC (uint32_t)5E6
-#define TDC_CLK_FREQ (uint32_t) 8e6
-#define TDC_MEAS_MODE 0   //0 = mode 1; 1 = mode 2
+#define TDC_CLK_FREQ (uint32_t)8e6
+#define TDC_MEAS_MODE 1   //0 = mode 1; 1 = mode 2
 
 //Laser pin defintions
 #define LASER_ENABLE_PIN 26 // physical pin 37; must be TTL HI to allow emission
@@ -115,13 +115,13 @@ void *dataprocFunc(void *arg)
             break;
         }
 
-        if(TDC_MEAS_MODE)
+        if (TDC_MEAS_MODE)
         {
-            ToF = tdc_data[0]*(cal_periods - 1) / ((double)tdc_data[4] - tdc_data[3]) / (double)tdc_arg->tdc->clk_freq;
+            ToF = calcToF(tdc_data, cal_periods, tdc_arg->tdc->clk_freq);
         }
         else
         {
-            ToF = calcToF(tdc_data, cal_periods, tdc_arg->tdc->clk_freq);
+            ToF = tdc_data[0]*(cal_periods - 1) / ((double)tdc_data[4] - tdc_data[3]) / (double)tdc_arg->tdc->clk_freq;
         }
 
     } // end if (valid_data_flag)
@@ -197,10 +197,9 @@ int main()
     dataproc_t *data_proc = dataprocCreate(100);
     pthread_create(&data_proc_tid, NULL, &dataprocMain, data_proc);
     /************************************************/
-    
 
     printf("LASER_PULSE_PERIOD= %f\n", LASER_PULSE_PERIOD);
-
+    
     gpioCfgClock(1, PI_CLOCK_PCM, 0); //1us sample rate, PCM clock
     gpioInitialise();
 
@@ -273,9 +272,12 @@ int main()
         {
             char hdr_strs[] = 
                 "TIMESTAMP (s),DIST (m),TOF (usec),TIME1,CLOCK_COUNT1,TIME2,CAL1,CAL2\n";
-
             loggerSendLogMsg(logger, hdr_strs, sizeof(hdr_strs), OUT_FILE, 0, true);
             
+            // start 10kHz, 50% PWM signal to drive laser
+            gpioSetPWMfrequency(LASER_PULSE_PIN, 10e3); 
+            gpioPWM(LASER_PULSE_PIN, 5);
+
             //start new measurement on TDC
             static char meas_cmds[2] = {
                 0x40, //Write to CONFIG1
@@ -287,34 +289,10 @@ int main()
             uint32_t start_tick = gpioTick();
             while ((gpioTick() - start_tick) < LASER_ACQ_USEC) // main data acquisition loop
             {
+                gpioWrite(TDC_START_PIN, 0);
                 spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds));
-                gpioDelay(1); // small delay to allow TDC to process data
-            
-                #ifdef DEBUG
-                //DEBUGGING: wait a know period of time and send a stop pulse
+                gpioDelay(3); // small delay to allow TDC to process data
                 gpioWrite(TDC_START_PIN, 1);
-                gpioDelay(5);
-                gpioWrite(TDC_STOP_PIN, 1);
-
-                gpioWrite(TDC_STOP_PIN, 0);
-                gpioWrite(TDC_START_PIN, 0);
-                #else
-                // send train of laser pulses
-                for (int i = 0; i < LASER_PULSE_COUNT; i++)
-                {
-                    if (i == 1) 
-                        gpioWrite_Bits_0_31_Set((LASER_PULSE_POL << LASER_PULSE_PIN) | (1 << TDC_START_PIN));
-                    else
-                        gpioWrite(LASER_PULSE_PIN, LASER_PULSE_POL);
-                    gpioDelay(LASER_PULSE_PERIOD / 2);
-                    gpioWrite(LASER_PULSE_PIN, !LASER_PULSE_POL);
-                    gpioDelay(LASER_PULSE_PERIOD / 2);
-                }
-
-                // gpioDelay(20);
-                // gpioTrigger(TDC_STOP_PIN, 3, 1);
-                gpioWrite(TDC_START_PIN, 0);
-                #endif
 
                 //Poll TDC INT pin to signal available data
                 uint32_t curr_tick = gpioTick();
@@ -362,9 +340,9 @@ int main()
                     char tx_buff2[7] = {TDC_CMD(1, 0, TDC_CALIBRATION1)}; //auto incrementing read of CALIBRATION1 and CALIBRATION2
                     spiXfer(tdc.spi_handle, tx_buff2, rx_buff + sizeof(tx_buff1), sizeof(tx_buff2));
 
-                    // printf("rx_buff after txaction 2=");
-                    // printArray(rx_buff, 17);
-                    // printf("\n");
+                    printf("rx_buff after txaction 2=");
+                    printArray(rx_buff, 17);
+                    printf("\n");
                     /*********************************/
                     #else
 
@@ -406,6 +384,8 @@ int main()
                     // printf("TDC timeout occured\n");
                 } // end else linked to if (!gpioRead(tdc.int_pin))
             } // end main data acquisitio loop; while((gpioTick() - start_tick) < ...)
+
+            gpioPWM(LASER_PULSE_PIN, 0);
         } // end else if (c == 'P')
         else
             continue;
