@@ -276,7 +276,7 @@ int main()
             
             // start 10kHz, 50% PWM signal to drive laser
             gpioSetPWMfrequency(LASER_PULSE_PIN, 10e3); 
-            gpioPWM(LASER_PULSE_PIN, 5);
+            gpioPWM(LASER_PULSE_PIN, 255/2);
 
             //start new measurement on TDC
             static char meas_cmds[2] = {

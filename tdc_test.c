@@ -7,7 +7,7 @@
 #include "tcp_handler.h"
 
 #define AUTOINC_METHOD
-// #define DEBUG
+#define DEBUG
 
 //TEST definitions
 #define TDC_CLK_PIN 4     // physical pin 7; GPIOCLK0 for TDC reference
@@ -18,7 +18,7 @@
 #define TDC_STOP_PIN 18  // physical pin 12; provides TDC stop signal for debugging
 #define TDC_TIMEOUT_USEC (uint32_t)5E6
 #define TDC_CLK_FREQ (uint32_t) 8e6
-#define TDC_MEAS_MODE 0   //0 = mode 1; 1 = mode 2
+#define TDC_MEAS_MODE 1   //0 = mode 1; 1 = mode 2
 
 //Laser pin defintions
 #define LASER_ENABLE_PIN 26 // physical pin 37; must be TTL HI to allow emission
@@ -28,12 +28,12 @@
 #define LASER_PULSE_FREQ 10e3
 #define LASER_PULSE_PERIOD 1 / (LASER_PULSE_FREQ)*1E6
 #define LASER_PULSE_POL 1 // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI
-#define LASER_ACQ_USEC (uint32_t)60e6
+#define LASER_ACQ_USEC (uint32_t)180e6
 #define OUT_FILE "./all_vals.txt"
 
 #define TCP_PORT 49417
 
-typedef struct DataProcArg
+struct DataProcArg
 {
     logger_t *logger;
     tcp_handler_t *tcp_handler;
@@ -147,11 +147,12 @@ void *dataprocFunc(void *arg)
     }
 
     /********** pass data to logger and tcp consumers if available **********/ 
+    printf("logger state = %d\n", tdc_arg->logger->status);
     if (tdc_arg->logger != NULL)
     {
-        // printf("logger state = %d\n", tdc_arg->logger->status);
         loggerSendLogMsg(tdc_arg->logger, data_str, data_str_len, OUT_FILE, 0, true);
     }
+    printf("TCP state = %d\n", tdc_arg->tcp_handler->tcp_state);
     if (tdc_arg->tcp_handler != NULL && tdc_arg->tcp_handler->tcp_state == TCPH_STATE_CONNECTED)
     {
         tcpHandlerWrite(tdc_arg->tcp_handler, data_str, data_str_len, 0, true);
@@ -168,7 +169,7 @@ int main()
     /********** Building CPU masks **********/
     cpu_set_t main_cpu;
     CPU_ZERO(&main_cpu);
-    CPU_SET(0, &main_cpu);
+    CPU_SET(1, &main_cpu);
     pthread_setaffinity_np(pthread_self(), sizeof(main_cpu), &main_cpu); // place DAQ thread on isolated cpu
     /****************************************/
 
@@ -287,6 +288,7 @@ int main()
             uint32_t start_tick = gpioTick();
             while ((gpioTick() - start_tick) < LASER_ACQ_USEC) // main data acquisition loop
             {
+                gpioDelay(10000);
                 spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds));
                 gpioDelay(1); // small delay to allow TDC to process data
             
@@ -398,14 +400,16 @@ int main()
                     data->tcp_handler = tcp_handler;
                     data->tdc = &tdc;
 
-                    dataprocSendData(data_proc, &dataprocFunc, (void *)data, 0, true);
-
+                    printf("queuing dataproc\n");
+                    dataprocSendData(data_proc, &dataprocFunc, (void *)data, 0, false);
+                    printf("queued dataproc\n");
                 }    // end if (!gpioRead(tdc.int_pin)), i.e. no timeout waiting for TDC
                 else //else timeout occured
                 {
                     // printf("TDC timeout occured\n");
                 } // end else linked to if (!gpioRead(tdc.int_pin))
             } // end main data acquisitio loop; while((gpioTick() - start_tick) < ...)
+            printf("done Acq\n");
         } // end else if (c == 'P')
         else
             continue;
