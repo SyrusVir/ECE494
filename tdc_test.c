@@ -5,6 +5,9 @@
 #include "logger.h"
 #include "data_processor.h"
 #include "tcp_handler.h"
+#include "scanmirror.h"
+#include "pinpoller.h"
+#include "MLD019.h"
 
 #define AUTOINC_METHOD
 #define DEBUG
@@ -28,7 +31,7 @@
 #define LASER_PULSE_FREQ 10e3
 #define LASER_PULSE_PERIOD 1 / (LASER_PULSE_FREQ)*1E6
 #define LASER_PULSE_POL 1 // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI
-#define LASER_ACQ_USEC (uint32_t)180e6
+#define LASER_ACQ_USEC (uint32_t)45e6
 #define OUT_FILE "./all_vals.txt"
 
 #define TCP_PORT 49417
@@ -401,7 +404,7 @@ int main()
                     data->tdc = &tdc;
 
                     printf("queuing dataproc\n");
-                    dataprocSendData(data_proc, &dataprocFunc, (void *)data, 0, false);
+                    dataprocSendData(data_proc, &dataprocFunc, (void *)data, 0, true);
                     printf("queued dataproc\n");
                 }    // end if (!gpioRead(tdc.int_pin)), i.e. no timeout waiting for TDC
                 else //else timeout occured
@@ -416,13 +419,12 @@ int main()
 
     } // end while(1)
 
-    spiClose(tdc.spi_handle);
 
     tcpHandlerClose(tcp_handler, 0, true);
     loggerSendCloseMsg(logger, 0, true);
     dataprocSendStop(data_proc, 0, true);
 
-    gpioHardwareClock(tdc.clk_pin, 0);
+    tdcClose(&tdc);
     gpioWrite(LASER_SHUTTER_PIN, 0);
     gpioWrite(LASER_ENABLE_PIN, 0);
     gpioTerminate();
