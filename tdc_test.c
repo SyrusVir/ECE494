@@ -11,14 +11,10 @@
 #include "pinpoller.h"
 #include "MLD019.h"
 #include <stdint.h>
+
 // user interface libraries
 #include <string.h>
 #include <ctype.h>
-
-#define USE_AUTOINC_METHOD  // comment out this line to use 5 separate SPI transactions to retrieve data (SLOWER)
-#define USE_DEBUG           // comment out this line to use LASER pin definitions instead of TDC_START_PIN and TDC_STOP_PIN
-#define USE_LOGGER          // comment out this line to not use the threaded logger
-#define USE_TCP             // comement out this line to not use the threaded tcp handler
 
 //TEST definitions
 #define TDC_CLK_PIN 4     // physical pin 7; GPIOCLK0 for TDC reference
@@ -30,6 +26,7 @@
 #define TDC_TIMEOUT_USEC (uint32_t)5E6
 #define TDC_CLK_FREQ (uint32_t) 8e6
 #define TDC_MEAS_MODE 1   //0 = mode 1; 1 = mode 2
+#define TDC_DELAY_USEC 10 // delay between TDC_START and TDC_STOP
 
 //Laser pin defintions
 #define DETECTOR_GATE_PIN 5 // physical pin 29; controls photon detector gate
@@ -51,6 +48,13 @@
 #define MIRROR_FREQ_PIN 18 //phyiscal pin 12; PWM mirror control signal
 
 #define TCP_PORT 49417 //TCP Port 
+
+// Module selectors 
+#define USE_AUTOINC_METHOD  // comment out this line to use 5 separate SPI transactions to retrieve data (SLOWER)
+#define USE_DEBUG           // comment out this line to use LASER pin definitions instead of TDC_START_PIN and TDC_STOP_PIN
+#define USE_LOGGER          // comment out this line to not use the threaded logger
+#define USE_TCP             // comment out this line to not use the threaded tcp handler
+#define USE_PWM_TRIGGER     // if defined, a continuous PWM siganl is generated at LASER_PULSE_PIN. If
 
 // structure defining argument to dataprocFunc
 struct DataProcArg
@@ -137,11 +141,11 @@ void *dataprocFunc(void *arg)
 
         if(TDC_MEAS_MODE)
         {
-            ToF = tdc_data[0]*(cal_periods - 1) / ((double)tdc_data[4] - tdc_data[3]) / (double)tdc_arg->tdc->clk_freq;
+            ToF = calcToF(tdc_data, cal_periods, tdc_arg->tdc->clk_freq);
         }
         else
         {
-            ToF = calcToF(tdc_data, cal_periods, tdc_arg->tdc->clk_freq);
+            ToF = tdc_data[0]*(cal_periods - 1) / ((double)tdc_data[4] - tdc_data[3]) / (double)tdc_arg->tdc->clk_freq;
         }
 
     } // end if (valid_data_flag)
@@ -167,12 +171,12 @@ void *dataprocFunc(void *arg)
     }
 
     /********** pass data to logger and tcp consumers if available **********/ 
-    printf("logger state = %d\n", tdc_arg->logger->status);
+    // printf("logger state = %d\n", tdc_arg->logger->status);
     if (tdc_arg->logger != NULL)
     {
         loggerSendLogMsg(tdc_arg->logger, data_str, data_str_len, OUT_FILE, 0, true);
     }
-    printf("TCP state = %d\n", tdc_arg->tcp_handler->tcp_state);
+    // printf("TCP state = %d\n", tdc_arg->tcp_handler->tcp_state);
     if (tdc_arg->tcp_handler != NULL && tdc_arg->tcp_handler->tcp_state == TCPH_STATE_CONNECTED)
     {
         tcpHandlerWrite(tdc_arg->tcp_handler, data_str, data_str_len, 0, true);
@@ -183,7 +187,6 @@ void *dataprocFunc(void *arg)
     free(tdc_arg);
     return NULL;
 }
-
 
 int main()
 {
@@ -329,8 +332,8 @@ int main()
 
         char str_in[10];
         char c;
-        printf("Enter S to toggle shutter.\n");
-        printf("Enter E to toggle enable.\n");
+        // printf("Enter S to toggle shutter.\n");
+        // printf("Enter E to toggle enable.\n");
         printf("Enter P to begin a TDC measurement.\n");
         printf("Enter G to toggle detector gate.\n");
         printf("Enter a number to set mirror RPM.\n");
@@ -352,8 +355,11 @@ int main()
 
         /******** This point only reached if user enteres single character *********/
 
-        if (c == 'q' || c == 'Q') //
+        if (c == 'q' || c == 'Q') 
+        {
+            mirrorSetRPM(mirror,0);
             break;
+        }
         else if (c == 'G')
         {
             gate_state = !gate_state;
@@ -374,10 +380,14 @@ int main()
         }
         else if (c == 'P')
         {
+            printf("Acquiring data...\n");
+            mirrorSetRPM(mirror, 0); // disable mirror
+            gpioDelay(3); // short delay
+
             char hdr_strs[] = 
                 "TIMESTAMP (s),DIST (m),TOF (usec),TIME1,CLOCK_COUNT1,TIME2,CAL1,CAL2\n";
 
-            loggerSendLogMsg(logger, hdr_strs, sizeof(hdr_strs), OUT_FILE, 0, true);
+            loggerSendLogMsg(logger, hdr_strs, sizeof(hdr_strs), OUT_FILE, 0, true);       
             
             //start new measurement on TDC
             static char meas_cmds[2] = {
@@ -386,18 +396,17 @@ int main()
             };
             char meas_cmds_rx[sizeof(meas_cmds)];
 
-
             uint32_t start_tick = gpioTick();
             while ((gpioTick() - start_tick) < LASER_ACQ_USEC) // main data acquisition loop
             {
-                gpioDelay(10000);
+                gpioDelay(10); 
                 spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds));
                 gpioDelay(1); // small delay to allow TDC to process data
             
                 #ifdef USE_DEBUG
                 //DEBUGGING: wait a know period of time and send a stop pulse
                 gpioWrite(TDC_START_PIN, 1);
-                gpioDelay(5);
+                gpioDelay(TDC_DELAY_USEC);
                 gpioWrite(TDC_STOP_PIN, 1);
 
                 gpioWrite(TDC_STOP_PIN, 0);
@@ -454,7 +463,6 @@ int main()
                     // printf("rx_buff after transaction 1=");
                     // printArray(rx_buff, 17);
                     // printf("\n");
-
                     /*********************************/
 
                     /********* Transaction 2 *********/
@@ -471,7 +479,6 @@ int main()
                     // printf("\n");
                     /*********************************/
                     #else
-
                     static char tof_cmds[5] = {
                         // TDC commands for retrieving TOF
                         0x10, //Read TIME1
@@ -502,15 +509,17 @@ int main()
                     data->tcp_handler = tcp_handler;
                     data->tdc = &tdc;
 
-                    printf("queuing dataproc\n");
+                    // printf("queuing dataproc\n");
                     dataprocSendData(data_proc, &dataprocFunc, (void *)data, 0, true);
-                    printf("queued dataproc\n");
+                    // printf("queued dataproc\n");
                 }    // end if (!gpioRead(tdc.int_pin)), i.e. no timeout waiting for TDC
                 else //else timeout occured
                 {
                     // printf("TDC timeout occured\n");
                 } // end else linked to if (!gpioRead(tdc.int_pin))
             } // end main data acquisitio loop; while((gpioTick() - start_tick) < ...)
+            
+            gpioPWM(LASER_PULSE_PIN, 0); // stop laser pulse train
             printf("done Acq\n");
         } // end else if (c == 'P')
         else continue;
@@ -523,15 +532,14 @@ int main()
     tdcClose(&tdc);
     gpioWrite(LASER_SHUTTER_PIN, 0);
     gpioWrite(LASER_ENABLE_PIN, 0);
-    gpioTerminate();
 
     pthread_join(tcp_tid, NULL);
     pthread_join(logger_tid, NULL);
-
     pthread_join(data_proc_tid, NULL);
 
     loggerDestroy(logger);
     tcpHandlerDestroy(tcp_handler);
     dataprocDestroy(data_proc);
 
+    gpioTerminate();
 } // end main()

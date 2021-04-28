@@ -523,7 +523,6 @@ int main()
     tdcClose(&tdc);
     gpioWrite(LASER_SHUTTER_PIN, 0);
     gpioWrite(LASER_ENABLE_PIN, 0);
-    gpioTerminate();
 
     pthread_join(tcp_tid, NULL);
     pthread_join(logger_tid, NULL);
@@ -534,4 +533,5 @@ int main()
     tcpHandlerDestroy(tcp_handler);
     dataprocDestroy(data_proc);
 
+    gpioTerminate();
 } // end main()
