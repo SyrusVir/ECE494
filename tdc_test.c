@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
+#include <pigpio.h>
 #include <sys/time.h>
+#include <sys/sysinfo.h>
 #include <sched.h>
 #include "tdc_util.h"
 #include "logger.h"
@@ -8,9 +10,15 @@
 #include "scanmirror.h"
 #include "pinpoller.h"
 #include "MLD019.h"
+#include <stdint.h>
+// user interface libraries
+#include <string.h>
+#include <ctype.h>
 
-#define AUTOINC_METHOD
-#define DEBUG
+#define USE_AUTOINC_METHOD  // comment out this line to use 5 separate SPI transactions to retrieve data (SLOWER)
+#define USE_DEBUG           // comment out this line to use LASER pin definitions instead of TDC_START_PIN and TDC_STOP_PIN
+#define USE_LOGGER          // comment out this line to not use the threaded logger
+#define USE_TCP             // comement out this line to not use the threaded tcp handler
 
 //TEST definitions
 #define TDC_CLK_PIN 4     // physical pin 7; GPIOCLK0 for TDC reference
@@ -24,6 +32,7 @@
 #define TDC_MEAS_MODE 1   //0 = mode 1; 1 = mode 2
 
 //Laser pin defintions
+#define DETECTOR_GATE_PIN 5 // physical pin 29; controls photon detector gate
 #define LASER_ENABLE_PIN 26 // physical pin 37; must be TTL HI to allow emission
 #define LASER_SHUTTER_PIN 6 // physical pin 31; must be TTL HI to allow emission; wait 500 ms after raising
 #define LASER_PULSE_PIN 23  // physical pin 16; outputs trigger pulses to laser driver
@@ -34,8 +43,16 @@
 #define LASER_ACQ_USEC (uint32_t)45e6
 #define OUT_FILE "./all_vals.txt"
 
-#define TCP_PORT 49417
+// Core definitinos
+#define MAIN_CORE 3 // isolated core for DAQ and instrument control, i.e. main
+#define POLL_CORE 2 // isolated core for pin polling
 
+//Mirror pin definitions
+#define MIRROR_FREQ_PIN 18 //phyiscal pin 12; PWM mirror control signal
+
+#define TCP_PORT 49417 //TCP Port 
+
+// structure defining argument to dataprocFunc
 struct DataProcArg
 {
     logger_t *logger;
@@ -79,7 +96,7 @@ void *dataprocFunc(void *arg)
      */
     for (uint8_t i = 0; i < 5; i++)
     {
-        #ifdef AUTOINC_METHOD
+        #ifdef USE_AUTOINC_METHOD
         uint32_t conv = convertSubsetToLong(tdc_arg->raw_tdc_data + rx_data_idx[i], 3, true);
         #else
         uint32_t conv = convertSubsetToLong(tdc_arg->raw_tdc_data + i * 4, 4, true);
@@ -167,46 +184,90 @@ void *dataprocFunc(void *arg)
     return NULL;
 }
 
+
 int main()
 {
-    /********** Building CPU masks **********/
+    /***** GPIO clock configuration and GPIO library initialisation *****/
+    gpioCfgClock(1, PI_CLOCK_PCM, 0); //1us sample rate, PCM clock
+    if (gpioInitialise() == PI_INIT_FAILED)
+    {
+        perror("CRITICAL ERROR in gpioInitialise()");
+        return -1;
+    } 
+    /********************************************************************/
+    
+    /********** Building CPU masks and thread attr's **********/
     cpu_set_t main_cpu;
     CPU_ZERO(&main_cpu);
-    CPU_SET(1, &main_cpu);
-    pthread_setaffinity_np(pthread_self(), sizeof(main_cpu), &main_cpu); // place DAQ thread on isolated cpu
-    /****************************************/
+    CPU_SET(MAIN_CORE, &main_cpu);
 
+    cpu_set_t poller_cpu;
+    CPU_ZERO(&poller_cpu);
+    CPU_SET(POLL_CORE, &poller_cpu);
+
+    cpu_set_t nonisol_cpu;
+    CPU_ZERO(&nonisol_cpu);
+    for (uint8_t i = 0; i < get_nprocs_conf(); i++) // iterate over available cpu cores
+    {
+        // add core to non isolated set if not main or poller core
+        if (i != MAIN_CORE && i != POLL_CORE)
+        {
+            CPU_SET(i, &nonisol_cpu);
+        }
+    }
+    /********************************************/
+    
     /********** Threaded Logger Configuration *********/
+    logger_t* logger = NULL;
     pthread_t logger_tid;
-    logger_t *logger = loggerCreate(100);
+    #ifdef USE_LOGGER
+    pthread_attr_t logger_attr;
+    logger = loggerCreate(100);
 
-    // start loggerMain, passing the configured logger struct as argument
-    pthread_create(&logger_tid, NULL, &loggerMain, logger);
+    // configure logger thread attribute to assign cpu cores
+    pthread_attr_init(&logger_attr);
+    pthread_attr_setaffinity_np(&logger_attr, sizeof(nonisol_cpu), &nonisol_cpu);
+
+    pthread_create(&logger_tid, &logger_attr, &loggerMain, logger); // start loggerMain, passing the configured logger struct as argument
+    pthread_attr_destroy(&logger_attr); // destroy attr; no effect on already created threads
+    #endif
     /************************************************/
 
     /********** TCP Handler Configuration **********/
+    tcp_handler_t* tcp_handler = NULL;
     pthread_t tcp_tid;
+    #ifdef USE_TCP
+    pthread_attr_t tcp_attr;
     struct sockaddr_in server_addr = {
         .sin_family = AF_INET,        //TCP
         .sin_port = htons(TCP_PORT),  //define port
         .sin_addr.s_addr = INADDR_ANY //accept connection at any address available
     };
-    tcp_handler_t *tcp_handler = tcpHandlerInit(server_addr, 100);
+    tcp_handler = tcpHandlerInit(server_addr, 100);
 
-    pthread_create(&tcp_tid, NULL, &tcpHandlerMain, tcp_handler);
+    // config tcp thread attribute to assign non-isolated cores
+    pthread_attr_init(&tcp_attr);
+    pthread_attr_setaffinity_np(&tcp_attr, sizeof(nonisol_cpu), &nonisol_cpu);
+
+    pthread_create(&tcp_tid, &tcp_attr, &tcpHandlerMain, tcp_handler); // start tcp thread
+    pthread_attr_destroy(&tcp_attr); // destroy attr; no effect on already created threads
+    #endif
     /*************************************************/
 
     /********* Data Processor Configuraiton *********/
     pthread_t data_proc_tid;
+    pthread_attr_t data_proc_attr;
     dataproc_t *data_proc = dataprocCreate(100);
-    pthread_create(&data_proc_tid, NULL, &dataprocMain, data_proc);
+
+    // configure data processor core affinities to non-isolated cores
+    pthread_attr_init(&data_proc_attr);
+    pthread_attr_setaffinity_np(&data_proc_attr, sizeof(nonisol_cpu), &nonisol_cpu);
+
+    pthread_create(&data_proc_tid, &data_proc_attr, &dataprocMain, data_proc); // start data processor thread
+    pthread_attr_destroy(&data_proc_attr); // destroy attr; no effect on already created threads
     /************************************************/
     
-
-    printf("LASER_PULSE_PERIOD= %f\n", LASER_PULSE_PERIOD);
-
-    gpioCfgClock(1, PI_CLOCK_PCM, 0); //1us sample rate, PCM clock
-    gpioInitialise();
+    pthread_setaffinity_np(pthread_self(), sizeof(main_cpu), &main_cpu); // place DAQ thread on isolated cpu 3
 
     /******** TDC Initialization *********/
     // opens SPI connection and configures assigned pins
@@ -218,25 +279,15 @@ int main()
         .cal_periods = TDC_CAL_2};
     tdcInit(&tdc, TDC_BAUD);
 
-    // printf("tdc.spi_handle=%d\n", tdc.spi_handle);
-
     // enable additional pins for debugging
-    gpioSetMode(TDC_START_PIN, PI_OUTPUT); // active LOW
-    gpioSetMode(TDC_STOP_PIN, PI_OUTPUT);  // active LOW
+    gpioSetMode(TDC_START_PIN, PI_OUTPUT); // active HI
+    gpioSetMode(TDC_STOP_PIN, PI_OUTPUT);  // active HI
 
     // TDC must see rising edge of ENABLE while powered for proper internal initializaiton
     gpioWrite(tdc.enable_pin, 0);
     gpioDelay(3); // Short delay to make sure TDC sees LOW before rising edge
     gpioWrite(tdc.enable_pin, 1);
-    /***************************************/
-
-    // Configure laser control pins
-    gpioSetMode(LASER_ENABLE_PIN, PI_OUTPUT);
-    gpioSetMode(LASER_PULSE_PIN, PI_OUTPUT);
-    gpioSetMode(LASER_SHUTTER_PIN, PI_OUTPUT);
-    gpioWrite(LASER_SHUTTER_PIN, 0); // initialise to low
-    gpioWrite(LASER_ENABLE_PIN, 0);  // initialise to low
-
+    
     //Non-incrementing write to CONFIG2 reg (address 0x01)
     //Clear CONFIG2 to configure 2 calibration clock periods,
     // no averaging, and single stop signal operation
@@ -248,19 +299,67 @@ int main()
     spiXfer(tdc.spi_handle, config2_cmds, config2_rx, sizeof(config2_cmds));
     /****************************************/
 
+    /********* Initializing laser control pins *********/
+    gpioSetMode(DETECTOR_GATE_PIN, PI_OUTPUT);
+    gpioSetMode(LASER_ENABLE_PIN, PI_OUTPUT);
+    gpioSetMode(LASER_PULSE_PIN, PI_OUTPUT);
+    gpioSetMode(LASER_SHUTTER_PIN, PI_OUTPUT);
+
+    gpioWrite(DETECTOR_GATE_PIN, 0); // initialise to low/open
+    gpioWrite(LASER_SHUTTER_PIN, 0); // initialise to low/shuttered
+    gpioWrite(LASER_ENABLE_PIN, 0);  // initialise to low/disabled
+    /**************************************************/
+
+    /********* Mirror configuration *********/
+    mirror_t mirror = {
+        .FREQ_PIN = MIRROR_FREQ_PIN,
+        .ENABLE_PIN = -1, // unused pin
+        .ATSPEED_PIN = -1 // unused pin
+    };
+
+    mirrorConfig(mirror);
+    mirrorSetRPM(mirror, 0); // start with mirror off
+    /****************************************/
+
     while (1) // begin main loop
     {
         static bool shutter_state = 0;
         static bool enable_state = 0;
+        static bool gate_state = 0;
 
+        char str_in[10];
         char c;
         printf("Enter S to toggle shutter.\n");
         printf("Enter E to toggle enable.\n");
         printf("Enter P to begin a TDC measurement.\n");
+        printf("Enter G to toggle detector gate.\n");
+        printf("Enter a number to set mirror RPM.\n");
         printf("Enter 'q' or 'Q' to quit.\n");
-        scanf(" %c", &c);
-        if (c == 'q' || c == 'Q')
+        scanf(" %s", &str_in);
+        
+        if (isdigit(*str_in)) //if first char is number assume whole string number
+        {
+             
+            int freq = atoi(str_in);    // set mirror rpm
+            mirrorSetRPM(mirror, freq); // jump to next loop iteration
+            continue;
+        }
+        else if (strlen(str_in) == 1)
+        {
+            c = *str_in; // if single char entered, save to variable and do NOT jump to next iteration
+        }
+        else continue; // if a word string is entered, ignore by jumping to next iteration
+
+        /******** This point only reached if user enteres single character *********/
+
+        if (c == 'q' || c == 'Q') //
             break;
+        else if (c == 'G')
+        {
+            gate_state = !gate_state;
+            gpioWrite(DETECTOR_GATE_PIN, gate_state);
+            continue;
+        }
         else if (c == 'S')
         {
             shutter_state = !shutter_state;
@@ -295,7 +394,7 @@ int main()
                 spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds));
                 gpioDelay(1); // small delay to allow TDC to process data
             
-                #ifdef DEBUG
+                #ifdef USE_DEBUG
                 //DEBUGGING: wait a know period of time and send a stop pulse
                 gpioWrite(TDC_START_PIN, 1);
                 gpioDelay(5);
@@ -327,7 +426,7 @@ int main()
 
                 if (!gpioRead(tdc.int_pin)) //if TDC returned in time
                 {
-                    #ifdef AUTOINC_METHOD
+                    #ifdef USE_AUTOINC_METHOD
                     /******** Transaction 1 *********/
                     /**Transaction 1 starts an auto-incrementing read at register TIME1,
                     * reading 9 bytes to obtain the 3-byte long TIME1, CLOCK_COUNT1, 
@@ -414,11 +513,8 @@ int main()
             } // end main data acquisitio loop; while((gpioTick() - start_tick) < ...)
             printf("done Acq\n");
         } // end else if (c == 'P')
-        else
-            continue;
-
-    } // end while(1)
-
+        else continue;
+    } // end while(1); main loop
 
     tcpHandlerClose(tcp_handler, 0, true);
     loggerSendCloseMsg(logger, 0, true);
@@ -431,6 +527,7 @@ int main()
 
     pthread_join(tcp_tid, NULL);
     pthread_join(logger_tid, NULL);
+
     pthread_join(data_proc_tid, NULL);
 
     loggerDestroy(logger);
