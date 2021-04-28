@@ -16,15 +16,22 @@
 #include <string.h>
 #include <ctype.h>
 
-//TEST definitions
+// TCP Port definition
+#define TCP_PORT 49417 
+
+// MLD-019 definitions
+#define MLD_TTY "/dev/ttyAMA0"
+#define MLD_TIMEOUT_MSEC 10
+
+//TDC definitions
 #define TDC_CLK_PIN 4     // physical pin 7; GPIOCLK0 for TDC reference
 #define TDC_ENABLE_PIN 27 // physical pin 13; TDC Enable
 #define TDC_INT_PIN 22    // physical pin 15; TDC interrupt pin
 #define TDC_BAUD (uint32_t)250E6/64
 #define TDC_START_PIN 24 // physical pin 18; provides TDC start signal for debugging
 #define TDC_STOP_PIN 18  // physical pin 12; provides TDC stop signal for debugging
-#define TDC_TIMEOUT_USEC (uint32_t)5E6
-#define TDC_CLK_FREQ (uint32_t) 8e6
+#define TDC_TIMEOUT_USEC (uint32_t)5E6 // time to wait for TDC INT pin to go LO
+#define TDC_CLK_FREQ (uint32_t)19.2e6/2 // TDC ref clock frequency from Pi
 #define TDC_MEAS_MODE 1   //0 = mode 1; 1 = mode 2
 #define TDC_DELAY_USEC 10 // delay between TDC_START and TDC_STOP
 
@@ -45,16 +52,23 @@
 #define POLL_CORE 2 // isolated core for pin polling
 
 //Mirror pin definitions
-#define MIRROR_FREQ_PIN 18 //phyiscal pin 12; PWM mirror control signal
+#define MIRROR_FREQ_PIN 18      //phyiscal pin 12; PWM mirror control signal
+#define MIRROR_ATSPEED_PIN -1   // -1 for unused
+#define MIRROR_ENABLE_PIN -1   // -1 for unused
 
-#define TCP_PORT 49417 //TCP Port 
+//Start-of-scan definitions
+#define SOS_PIN 7           // physical pin 26; start-of-scan detector input
+#define SOS_LEVEL 0         // detector is active LO
+#define SOS_DELAY_USEC 10   // usecs to hold spinlock when SOS goes LO
 
 // Module selectors 
 #define USE_AUTOINC_METHOD  // comment out this line to use 5 separate SPI transactions to retrieve data (SLOWER)
 #define USE_DEBUG           // comment out this line to use LASER pin definitions instead of TDC_START_PIN and TDC_STOP_PIN
 #define USE_LOGGER          // comment out this line to not use the threaded logger
 #define USE_TCP             // comment out this line to not use the threaded tcp handler
-#define USE_PWM_TRIGGER     // if defined, a continuous PWM siganl is generated at LASER_PULSE_PIN. If
+// #define USE_POLLER          // comment out this line to not use pin polling
+// #define USE_MLD019          // comment out this line to not use serial commands to MLD-019 driver
+#define USE_MIRROR          // comment out this line to not use the GECKO scanning mirror
 
 // structure defining argument to dataprocFunc
 struct DataProcArg
@@ -222,7 +236,7 @@ int main()
     
     /********** Threaded Logger Configuration *********/
     logger_t* logger = NULL;
-    pthread_t logger_tid;
+    pthread_t logger_tid = 0;
     #ifdef USE_LOGGER
     pthread_attr_t logger_attr;
     logger = loggerCreate(100);
@@ -238,7 +252,7 @@ int main()
 
     /********** TCP Handler Configuration **********/
     tcp_handler_t* tcp_handler = NULL;
-    pthread_t tcp_tid;
+    pthread_t tcp_tid = 0;
     #ifdef USE_TCP
     pthread_attr_t tcp_attr;
     struct sockaddr_in server_addr = {
@@ -258,7 +272,7 @@ int main()
     /*************************************************/
 
     /********* Data Processor Configuraiton *********/
-    pthread_t data_proc_tid;
+    pthread_t data_proc_tid = 0;
     pthread_attr_t data_proc_attr;
     dataproc_t *data_proc = dataprocCreate(100);
 
@@ -270,7 +284,34 @@ int main()
     pthread_attr_destroy(&data_proc_attr); // destroy attr; no effect on already created threads
     /************************************************/
     
+    /********* Pin Poller Configuration *********/
+    pin_poller_t* poller = NULL;
+    pthread_t poller_tid = 0;
+    #ifdef USE_POLLER
+    pthread_spinlock_t lock;
+    pthread_attr_t poller_attr;
+    poller = pinPollerInit(&lock, SOS_PIN, SOS_LEVEL, SOS_DELAY_USEC);
+
+    // configure spin lock; unshared between processes (only between threads)
+    pthread_spin_init(&lock, 0);
+
+    // configure polling thread core affinities to non-isolated cores 
+    pthread_attr_init(&poller_attr);
+    pthread_attr_setaffinity_np(&poller_attr, sizeof(nonisol_cpu), &nonisol_cpu);
+
+    pthread_create(&poller_tid, &poller_attr, &pinPollerMain, poller); // start polling thread
+    pthread_attr_destroy(&poller_attr); // destroy attr; no effect on already created threads
+    #endif
+    /*******************************************/
+    
     pthread_setaffinity_np(pthread_self(), sizeof(main_cpu), &main_cpu); // place DAQ thread on isolated cpu 3
+
+    /********* MLD-019 Serial Comms Initialization *********/
+    mld_t* mld = NULL;
+    #ifdef USE_MLD019
+    mld = mldInit(MLD_TTY, MLD_TIMEOUT_MSEC);
+    #endif
+    /*******************************************************/
 
     /******** TDC Initialization *********/
     // opens SPI connection and configures assigned pins
@@ -313,15 +354,16 @@ int main()
     gpioWrite(LASER_ENABLE_PIN, 0);  // initialise to low/disabled
     /**************************************************/
 
+    #ifdef USE_MIRROR
     /********* Mirror configuration *********/
     mirror_t mirror = {
         .FREQ_PIN = MIRROR_FREQ_PIN,
-        .ENABLE_PIN = -1, // unused pin
-        .ATSPEED_PIN = -1 // unused pin
+        .ENABLE_PIN = MIRROR_ENABLE_PIN,
+        .ATSPEED_PIN = MIRROR_ATSPEED_PIN
     };
-
-    mirrorConfig(mirror);
+    mirrorConfig(mirror);    // configure pins
     mirrorSetRPM(mirror, 0); // start with mirror off
+    #endif
     /****************************************/
 
     while (1) // begin main loop
@@ -360,25 +402,34 @@ int main()
             mirrorSetRPM(mirror,0);
             break;
         }
-        else if (c == 'G')
+        else if (c == 'L') // emit a 10khz 50% duty signal for 30 s
+        {
+            gpioSetPWMfrequency(LASER_PULSE_PIN, (unsigned int)10E3);
+            gpioPWM(LASER_PULSE_PIN, 255/2);
+
+            gpioSleep(PI_TIME_RELATIVE, 30, 0);
+
+            gpioPWM(LASER_PULSE_PIN, 0);
+        }
+        else if (c == 'G') // toggle photon detector gate
         {
             gate_state = !gate_state;
             gpioWrite(DETECTOR_GATE_PIN, gate_state);
             continue;
         }
-        else if (c == 'S')
+        else if (c == 'S') // toggle laser shutter
         {
             shutter_state = !shutter_state;
             gpioWrite(LASER_SHUTTER_PIN, shutter_state);
             continue;
         }
-        else if (c == 'E')
+        else if (c == 'E') // toggle laser enable
         {
             enable_state = !enable_state;
             gpioWrite(LASER_ENABLE_PIN, enable_state);
             continue;
         }
-        else if (c == 'P')
+        else if (c == 'P') // start measurement
         {
             printf("Acquiring data...\n");
             mirrorSetRPM(mirror, 0); // disable mirror
@@ -528,7 +579,9 @@ int main()
     tcpHandlerClose(tcp_handler, 0, true);
     loggerSendCloseMsg(logger, 0, true);
     dataprocSendStop(data_proc, 0, true);
-
+    pinPollerExit(poller);
+    mldClose(mld);
+    
     tdcClose(&tdc);
     gpioWrite(LASER_SHUTTER_PIN, 0);
     gpioWrite(LASER_ENABLE_PIN, 0);
@@ -536,6 +589,7 @@ int main()
     pthread_join(tcp_tid, NULL);
     pthread_join(logger_tid, NULL);
     pthread_join(data_proc_tid, NULL);
+    pthread_join(poller_tid, NULL);
 
     loggerDestroy(logger);
     tcpHandlerDestroy(tcp_handler);
