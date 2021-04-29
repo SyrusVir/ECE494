@@ -28,7 +28,7 @@
 #define TDC_ENABLE_PIN 27 // physical pin 13; TDC Enable
 #define TDC_INT_PIN 22    // physical pin 15; TDC interrupt pin
 #define TDC_BAUD (uint32_t)250E6/64
-#define TDC_START_PIN 24 // physical pin 18; provides TDC start signal for debugging
+#define TDC_START_PIN 23 // physical pin 18; provides TDC start signal for debugging
 #define TDC_STOP_PIN 18  // physical pin 12; provides TDC stop signal for debugging
 #define TDC_TIMEOUT_USEC (uint32_t)5E6 // time to wait for TDC INT pin to go LO
 #define TDC_CLK_FREQ (uint32_t)19.2e6/2 // TDC ref clock frequency from Pi
@@ -126,7 +126,7 @@ void *dataprocFunc(void *arg)
             break;
         }
 
-        tdc_data[i] = conv & ~TDC_PARITY_MASK; // clear the parity bit from data
+        tdc_data[i] = conv & 0x7FFFFF; // clear the parity bit from data
     }
     /*****************************************************/
 
@@ -378,6 +378,7 @@ int main()
         // printf("Enter E to toggle enable.\n");
         printf("Enter P to begin a TDC measurement.\n");
         printf("Enter G to toggle detector gate.\n");
+        printf("Enter L to emit laser pulse signal.\n");
         printf("Enter a number to set mirror RPM.\n");
         printf("Enter 'q' or 'Q' to quit.\n");
         scanf(" %s", &str_in);
@@ -450,7 +451,7 @@ int main()
             uint32_t start_tick = gpioTick();
             while ((gpioTick() - start_tick) < LASER_ACQ_USEC) // main data acquisition loop
             {
-                gpioDelay(10); 
+                // gpioDelay(10); 
                 spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds));
                 gpioDelay(1); // small delay to allow TDC to process data
             
