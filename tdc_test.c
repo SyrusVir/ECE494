@@ -35,16 +35,28 @@
 #define TDC_MEAS_MODE 1   //0 = mode 1; 1 = mode 2
 #define TDC_DELAY_USEC 10 // delay between TDC_START and TDC_STOP
 
-//Laser pin defintions
+// Laser pin defintions
 #define DETECTOR_GATE_PIN 5 // physical pin 29; controls photon detector gate
 #define LASER_ENABLE_PIN 26 // physical pin 37; must be TTL HI to allow emission
 #define LASER_SHUTTER_PIN 6 // physical pin 31; must be TTL HI to allow emission; wait 500 ms after raising
 #define LASER_PULSE_PIN 23  // physical pin 16; outputs trigger pulses to laser driver
-#define LASER_PULSE_COUNT 2
-#define LASER_PULSE_FREQ 10e3
-#define LASER_PULSE_PERIOD 1 / (LASER_PULSE_FREQ)*1E6
+
+// Laser Trigger Pulse Attributes
+/** These macros control the trigger signal sent 
+ *  to the laser driver to trigger a single laser pulse.
+ *  
+ *  The trigger signal is a 50%-duty square wave of LASER_PULSE_COUNT pulses.
+ *  The width of each pulse is LASER_PULSE_PERIOD_USEC/2 microseconds.
+ *  The time between the end of one pulse and the start of the next 
+ *  is LASER_PULSE_PERIOD_USEC/2 microseconds.
+ *  If LASER_PULSE_POL is 1 (0), then the signal line is 
+ *  normally LO and pulsed HI (normally HI pulsed LO) 
+ */
+#define LASER_PULSE_COUNT 2 // Number of pulses 
+#define LASER_PULSE_FREQ_HZ 10e3
+#define LASER_PULSE_PERIOD_USEC 1 / (LASER_PULSE_FREQ_HZ)*1E6
 #define LASER_PULSE_POL 1 // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI
-#define LASER_ACQ_USEC (uint32_t)45e6
+#define LASER_ACQ_USEC (uint32_t)45e6 // Time in usec to acquire ToF data
 #define OUT_FILE "./all_vals.txt"
 
 // Core definitinos
@@ -62,8 +74,27 @@
 #define SOS_DELAY_USEC 10   // usecs to hold spinlock when SOS goes LO
 
 // Module selectors 
+/** Non-Autoincrement method:
+ *  ToF data from the TDC requires reading 5 values from the TDC internal registers
+ *  In the non-autoinc method, these values are read in 5 separate SPI transactions.
+ * 
+ *  Autoincrement method:
+ *  The autoincrement feature of the TDC7200 allows read/write operations to continue
+ *  on the next consecutive register. This is convenient as the data required for ToF
+ *  calculations are in consecutive registers. This allows all the necessary data to be
+ *  obtained in 2 separate SPI transactions as opposed to 5.
+ */ 
 #define USE_AUTOINC_METHOD  // comment out this line to use 5 separate SPI transactions to retrieve data (SLOWER)
+
+/** TDC Debugging:
+ *  The USE_DEBUG macro is used to switch into TDC debugging.
+ *  In this mode, other gpio pins on the RPi are used for the TDC
+ *  start and stop signal rather than external hardware (i.e. single photon detector).
+ *  
+ * These pins are defined by the TDC_START_PIN and TDC_STOP_PIN macros.
+ */ 
 #define USE_DEBUG           // comment out this line to use LASER pin definitions instead of TDC_START_PIN and TDC_STOP_PIN
+
 #define USE_LOGGER          // comment out this line to not use the threaded logger
 #define USE_TCP             // comment out this line to not use the threaded tcp handler
 // #define USE_POLLER          // comment out this line to not use pin polling
@@ -374,8 +405,8 @@ int main()
 
         char str_in[10];
         char c;
-        // printf("Enter S to toggle shutter.\n");
-        // printf("Enter E to toggle enable.\n");
+        printf("Enter S to toggle shutter.\n");
+        printf("Enter E to toggle enable.\n");
         printf("Enter P to begin a TDC measurement.\n");
         printf("Enter G to toggle detector gate.\n");
         printf("Enter L to emit laser pulse signal.\n");
@@ -433,8 +464,8 @@ int main()
         else if (c == 'P') // start measurement
         {
             printf("Acquiring data...\n");
-            mirrorSetRPM(mirror, 0); // disable mirror
-            gpioDelay(3); // short delay
+            // mirrorSetRPM(mirror, 0); // disable mirror to repurpose pin
+            // gpioDelay(3); // short delay to allow mirror signal to stop
 
             char hdr_strs[] = 
                 "TIMESTAMP (s),DIST (m),TOF (usec),TIME1,CLOCK_COUNT1,TIME2,CAL1,CAL2\n";
@@ -448,32 +479,32 @@ int main()
             };
             char meas_cmds_rx[sizeof(meas_cmds)];
 
-            uint32_t start_tick = gpioTick();
-            while ((gpioTick() - start_tick) < LASER_ACQ_USEC) // main data acquisition loop
+            uint32_t acq_start_tick = gpioTick(); // acquisition start tick
+            while ((gpioTick() - acq_start_tick) < LASER_ACQ_USEC) // main data acquisition loop
             {
                 // gpioDelay(10); 
-                spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds));
+                spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds)); // prime TDC measurement
                 gpioDelay(1); // small delay to allow TDC to process data
             
                 #ifdef USE_DEBUG
                 //DEBUGGING: wait a know period of time and send a stop pulse
-                gpioWrite(TDC_START_PIN, 1);
-                gpioDelay(TDC_DELAY_USEC);
-                gpioWrite(TDC_STOP_PIN, 1);
+                gpioWrite(TDC_START_PIN, 1);    // start TDC measurement
+                gpioDelay(TDC_DELAY_USEC);      // known delay
+                gpioWrite(TDC_STOP_PIN, 1);     // stop TDC measurement
 
-                gpioWrite(TDC_STOP_PIN, 0);
-                gpioWrite(TDC_START_PIN, 0);
+                gpioWrite(TDC_STOP_PIN, 0);     // reset pins to known state
+                gpioWrite(TDC_START_PIN, 0);    // reset pins to known state
                 #else
-                // send train of laser pulses
+                // send train of pulses to trigger single pulse from laser driver
                 for (int i = 0; i < LASER_PULSE_COUNT; i++)
                 {
                     if (i == 1) 
                         gpioWrite_Bits_0_31_Set((LASER_PULSE_POL << LASER_PULSE_PIN) | (1 << TDC_START_PIN));
                     else
                         gpioWrite(LASER_PULSE_PIN, LASER_PULSE_POL);
-                    gpioDelay(LASER_PULSE_PERIOD / 2);
+                    gpioDelay(LASER_PULSE_PERIOD_USEC / 2);
                     gpioWrite(LASER_PULSE_PIN, !LASER_PULSE_POL);
-                    gpioDelay(LASER_PULSE_PERIOD / 2);
+                    gpioDelay(LASER_PULSE_PERIOD_USEC / 2);
                 }
 
                 // gpioDelay(20);
@@ -569,12 +600,12 @@ int main()
                 {
                     // printf("TDC timeout occured\n");
                 } // end else linked to if (!gpioRead(tdc.int_pin))
-            } // end main data acquisitio loop; while((gpioTick() - start_tick) < ...)
+            } // end main data acquisitio loop; while((gpioTick() - acq_start_tick) < ...)
             
             gpioPWM(LASER_PULSE_PIN, 0); // stop laser pulse train
             printf("done Acq\n");
         } // end else if (c == 'P')
-        else continue;
+        else continue; // do nothing if unsupported input
     } // end while(1); main loop
 
     tcpHandlerClose(tcp_handler, 0, true);
