@@ -57,6 +57,7 @@
 #define LASER_PULSE_PERIOD_USEC 1 / (LASER_PULSE_FREQ_HZ)*1E6
 #define LASER_PULSE_POL 1 // Determines laser pulse polarity; 1 means pulse line is normally LO and pulsed HI
 #define LASER_ACQ_USEC (uint32_t)45e6 // Time in usec to acquire ToF data
+#define LASER_ACQ_PERIOD_USEC (uint32_t) 67 // TDC sampling period; delay between TDC measurements 
 #define OUT_FILE "./all_vals.txt"
 
 // Core definitinos
@@ -486,6 +487,9 @@ int main()
                 spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds)); // prime TDC measurement
                 gpioDelay(1); // small delay to allow TDC to process data
             
+                uint32_t samp_start_tick = gpioTick(); // TDC measurement start tick
+                uint32_t samp_end_tick = samp_start_tick + LASER_ACQ_PERIOD_USEC; // earliest time to start new TDC measurement
+
                 #ifdef USE_DEBUG
                 //DEBUGGING: wait a know period of time and send a stop pulse
                 gpioWrite(TDC_START_PIN, 1);    // start TDC measurement
@@ -600,6 +604,13 @@ int main()
                 {
                     // printf("TDC timeout occured\n");
                 } // end else linked to if (!gpioRead(tdc.int_pin))
+
+                // wait until appropriate sample delay has elapsed
+                curr_tick = gpioTick();
+                if (curr_tick < samp_end_tick)
+                {
+                    gpioDelay(samp_end_tick - curr_tick);
+                }
             } // end main data acquisitio loop; while((gpioTick() - acq_start_tick) < ...)
             
             gpioPWM(LASER_PULSE_PIN, 0); // stop laser pulse train
