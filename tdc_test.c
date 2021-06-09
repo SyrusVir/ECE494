@@ -75,6 +75,21 @@
 #define SOS_DELAY_USEC 10   // usecs to hold spinlock when SOS goes LO
 
 // Module selectors 
+/** Synchronous acquisition process (i.e. USE_SYNC_ACQ macro defined):
+ *  1)	Send laser trigger pulses to create 1 laser pulse; TDC started 
+ *  2)	Wait for TDC stop
+ *  3)	Collect data and send to processing loop
+ *  4)	Repeat from step 1)
+ * 
+ *  Asynchronous acquisition process (i.e. USE_SYNC_ACQ macro undefined):
+ *  1)	Start continuous laser emission
+ *  2)	Start TDC
+ *  3)	Wait for TDC stop
+ *  4)	Collect data and send to processing loop
+ *  5)	Repeat from step 2)
+ */
+#define USE_SYNC_ACQ        // comment out this line for asynchronous acquisition
+
 /** Non-Autoincrement method:
  *  ToF data from the TDC requires reading 5 values from the TDC internal registers
  *  In the non-autoinc method, these values are read in 5 separate SPI transactions.
@@ -467,6 +482,10 @@ int main()
             printf("Acquiring data...\n");
             // mirrorSetRPM(mirror, 0); // disable mirror to repurpose pin
             // gpioDelay(3); // short delay to allow mirror signal to stop
+            #ifndef USE_SYNC_ACQ
+            gpioSetPWMfrequency(LASER_PULSE_PIN, LASER_PULSE_FREQ_HZ); // config PWM frequency
+            gpioPWM(LASER_PULSE_PIN, 255/2); // start PWM @ 50% (255/2) duty 
+            #endif 
 
             char hdr_strs[] = 
                 "TIMESTAMP (s),DIST (m),TOF (usec),TIME1,CLOCK_COUNT1,TIME2,CAL1,CAL2\n";
@@ -486,7 +505,7 @@ int main()
                 // gpioDelay(10); 
                 spiXfer(tdc.spi_handle, meas_cmds, meas_cmds_rx, sizeof(meas_cmds)); // prime TDC measurement
                 gpioDelay(1); // small delay to allow TDC to process data
-            
+
                 uint32_t samp_start_tick = gpioTick(); // TDC measurement start tick
                 uint32_t samp_end_tick = samp_start_tick + LASER_ACQ_PERIOD_USEC; // earliest time to start new TDC measurement
 
@@ -499,6 +518,7 @@ int main()
                 gpioWrite(TDC_STOP_PIN, 0);     // reset pins to known state
                 gpioWrite(TDC_START_PIN, 0);    // reset pins to known state
                 #else
+                #ifdef USE_SYNC_ACQ
                 // send train of pulses to trigger single pulse from laser driver
                 for (int i = 0; i < LASER_PULSE_COUNT; i++)
                 {
@@ -514,6 +534,7 @@ int main()
                 // gpioDelay(20);
                 // gpioTrigger(TDC_STOP_PIN, 3, 1);
                 gpioWrite(TDC_START_PIN, 0);
+                #endif
                 #endif
 
                 //Poll TDC INT pin to signal available data
@@ -613,7 +634,9 @@ int main()
                 }
             } // end main data acquisitio loop; while((gpioTick() - acq_start_tick) < ...)
             
+            #ifndef USE_SYNC_ACQ
             gpioPWM(LASER_PULSE_PIN, 0); // stop laser pulse train
+            #endif
             printf("done Acq\n");
         } // end else if (c == 'P')
         else continue; // do nothing if unsupported input
